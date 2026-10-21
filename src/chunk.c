@@ -6,10 +6,12 @@
  * of the window, preferring, in this order: a paragraph break (a blank line or
  * a Markdown heading), a line that ends a sentence, the end of a sentence, a
  * line break, a space between words. Only when there is none of them is the
- * text cut at the end of the window. The next chunk starts `overlap`
- * characters before the end of the previous one, moved forward to the start of
- * a paragraph, a line, a sentence or a word found in the first half of the
- * overlap. Lines starting with "#" inside fenced code blocks are not headings.
+ * text cut at the end of the window. A chunk never ends right after a heading.
+ * The next chunk starts `overlap` characters before the end of the previous
+ * one, moved forward to the first start of a paragraph found in the first half
+ * of the overlap, else of a line after a sentence, of a sentence, of a line, of
+ * a word, in this order. Lines starting with "#" inside fenced code blocks are
+ * not headings.
  */
 #include "internal.h"
 
@@ -29,18 +31,47 @@ static size_t skip_space(const char *t, size_t len, size_t i) {
 
 static bool is_closing(char c) { return c == '"' || c == '\'' || c == ')' || c == ']' || c == '*' || c == '_'; }
 
-/* True if a sentence ends right before t[j]: ".", "!" or "?", maybe followed by quotes or brackets. */
-static bool ends_sentence(const char *t, size_t from, size_t j) {
-    while (j > from && is_closing(t[j - 1])) j--;
-    return j > from && (t[j - 1] == '.' || t[j - 1] == '!' || t[j - 1] == '?');
+/* True if t[j] starts a CJK closing bracket: 」』】〕〗〙〛 or a fullwidth ")". */
+static bool is_cjk_closing(const char *t, size_t len, size_t j) {
+    if (j + 3 > len) return false;
+    const unsigned char *u = (const unsigned char *)t + j;
+    return (u[0] == 0xE3 && u[1] == 0x80 &&
+            (u[2] == 0x8D || u[2] == 0x8F || u[2] == 0x91 || u[2] == 0x95 || u[2] == 0x97 || u[2] == 0x99 ||
+             u[2] == 0x9B)) ||
+           (u[0] == 0xEF && u[1] == 0xBC && u[2] == 0x89);
 }
 
-/* True if t[j - 3..j) is an ideographic full stop or a fullwidth "!" or "?". */
+/* True if t[j - 3..j) is an ideographic full stop or a fullwidth "!" or "?", maybe followed by brackets. */
 static bool ends_cjk_sentence(const char *t, size_t from, size_t j) {
+    while (j >= from + 3 && is_cjk_closing(t, j, j - 3)) j -= 3;
     if (j < from + 3) return false;
     const unsigned char *u = (const unsigned char *)t + j - 3;
     return (u[0] == 0xE3 && u[1] == 0x80 && u[2] == 0x82) ||
            (u[0] == 0xEF && u[1] == 0xBC && (u[2] == 0x81 || u[2] == 0x9F));
+}
+
+/*
+ * True if a sentence ends right before t[j]: ".", "!" or "?", maybe followed
+ * by quotes or brackets; but not "12." starting a line (a numbered list) nor
+ * "e.g." or "i.e.".
+ */
+static bool ends_sentence(const char *t, size_t from, size_t j) {
+    while (j > from && is_closing(t[j - 1])) j--;
+    if (j <= from) return false;
+    if (t[j - 1] == '!' || t[j - 1] == '?') return true;
+    if (t[j - 1] != '.') return ends_cjk_sentence(t, from, j);
+
+    size_t w = j - 1; /* start of the word that ends with the dot */
+    while (w > from && !is_space(t[w - 1])) w--;
+    bool digits = w < j - 1, abbreviation = false;
+    for (size_t k = w; k < j - 1; k++) {
+        if (t[k] < '0' || t[k] > '9') digits = false;
+        if (t[k] == '.' && t[k + 1] != '.') abbreviation = true;
+    }
+    size_t b = w;
+    while (b > from && is_blank(t[b - 1])) b--;
+    if (digits && (b == 0 || t[b - 1] == '\n')) return false;
+    return !abbreviation;
 }
 
 /* The text being split, with its fenced code blocks (``` or ~~~). */
@@ -72,18 +103,24 @@ static bool add_fence(doc_t *d, size_t start, size_t end) {
     return true;
 }
 
-/* Finds the fenced code blocks: a fence is a line starting with 3 or more ` or ~. */
-static bool find_fences(doc_t *d) {
+/*
+ * Finds the fenced code blocks: a fence is a line starting with 3 or more ` or
+ * ~ (a line like ```code``` is inline code). `start` skips a byte order mark.
+ */
+static bool find_fences(doc_t *d, size_t start) {
     char open = 0;
     size_t open_len = 0, open_start = 0;
-    for (size_t line = 0; line < d->len;) {
+    for (size_t line = start; line < d->len;) {
         size_t eol = line;
         while (eol < d->len && d->t[eol] != '\n') eol++;
         size_t i = line;
         while (i < eol && i - line < 3 && d->t[i] == ' ') i++;
         char c = i < eol ? d->t[i] : 0;
         size_t n = c == '`' || c == '~' ? run_of(d, i, c) : 0;
-        if (n >= 3) {
+        bool inline_code = false;
+        for (size_t k = i + n; c == '`' && k < eol; k++)
+            if (d->t[k] == '`') inline_code = true;
+        if (n >= 3 && !inline_code) {
             if (!open) {
                 open = c;
                 open_len = n;
@@ -125,11 +162,21 @@ static bool after_blank_line(const char *t, size_t from, size_t j) {
     return j > from && t[j - 1] == '\n';
 }
 
+/* True if the last line before t[j] that is not blank is a heading. */
+static bool after_heading(const doc_t *d, size_t from, size_t j) {
+    const char *t = d->t;
+    while (j > from && is_space(t[j - 1])) j--;
+    size_t start = j;
+    while (start > from && t[start - 1] != '\n') start--;
+    return (start == 0 || t[start - 1] == '\n') && start < j && is_heading(d, start);
+}
+
 /* Kind of cut possible right before t[j], or -1. The chunk being built starts at `from`. */
 static int classify(const doc_t *d, size_t from, size_t j) {
     const char *t = d->t;
     char c = t[j];
     if (c == '\n') {
+        if (after_heading(d, from, j)) return -1; /* a heading goes with what follows it */
         size_t k = j + 1;
         while (k < d->len && is_blank(t[k])) k++;
         if (k >= d->len || t[k] == '\n') return BREAK_PARAGRAPH; /* a blank line follows */
@@ -140,7 +187,8 @@ static int classify(const doc_t *d, size_t from, size_t j) {
         return ends_sentence(t, from, k) ? BREAK_SENTENCE_LINE : BREAK_LINE;
     }
     if (is_blank(c)) return ends_sentence(t, from, j) ? BREAK_SENTENCE : BREAK_WORD;
-    if (((unsigned char)c & 0xC0) != 0x80 && ends_cjk_sentence(t, from, j)) return BREAK_SENTENCE;
+    if (((unsigned char)c & 0xC0) != 0x80 && !is_cjk_closing(t, d->len, j) && ends_cjk_sentence(t, from, j))
+        return BREAK_SENTENCE;
     return -1;
 }
 
@@ -161,14 +209,15 @@ static size_t find_break(const doc_t *d, size_t from, size_t lo, size_t limit) {
 }
 
 /*
- * Start of the chunk after t[from..e): `overlap` characters before e, moved to
- * the first start of a paragraph, else of a line, of a sentence or of a word in
- * the first half of the overlap. Returns e if the chunk is too short to overlap.
+ * Start of the chunk after t[from..e): `overlap` characters before e (at most
+ * all but one of the chunk), moved to the best start found in the first half of
+ * the overlap, ranked like the cuts. Returns e if the chunk is too short.
  */
 static size_t overlap_start(const doc_t *d, size_t from, size_t e, size_t overlap) {
     const char *t = d->t;
     size_t n = rag_utf8_count(t, from, e);
-    if (n <= overlap) return e;
+    if (n <= 1) return e;
+    if (overlap >= n) overlap = n - 1;
     size_t o = rag_utf8_advance(t, d->len, from, n - overlap);
     size_t half = rag_utf8_advance(t, d->len, o, overlap / 2);
 
@@ -179,14 +228,20 @@ static size_t overlap_start(const doc_t *d, size_t from, size_t e, size_t overla
         size_t q = k;
         while (q > from && is_blank(t[q - 1])) q--;
         int kind;
-        if (t[q - 1] == '\n')
-            kind = after_blank_line(t, from, q - 1) || is_heading(d, k) ? BREAK_PARAGRAPH : BREAK_LINE;
-        else if (q < k)
+        if (t[q - 1] == '\n') {
+            size_t p = q - 1;
+            while (p > from && is_blank(t[p - 1])) p--;
+            kind = after_blank_line(t, from, q - 1) || is_heading(d, k) ? BREAK_PARAGRAPH
+                   : ends_sentence(t, from, p)                          ? BREAK_SENTENCE_LINE
+                                                                        : BREAK_LINE;
+        } else if (q < k) {
             kind = ends_sentence(t, from, q) ? BREAK_SENTENCE : BREAK_WORD;
-        else if (((unsigned char)t[k] & 0xC0) != 0x80 && ends_cjk_sentence(t, from, k))
+        } else if (((unsigned char)t[k] & 0xC0) != 0x80 && !is_cjk_closing(t, d->len, k) &&
+                   ends_cjk_sentence(t, from, k)) {
             kind = BREAK_SENTENCE;
-        else
+        } else {
             continue;
+        }
         if (!found[kind]) {
             found[kind] = true;
             best[kind] = k;
@@ -233,17 +288,17 @@ bool rag_chunk_split(const char *text, size_t len, size_t size, size_t overlap, 
     if (size == 0) size = 1;
     if (overlap >= size) overlap = size - 1;
 
+    size_t pos = 0;
+    if (len >= 3 && (unsigned char)text[0] == 0xEF && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF)
+        pos = 3; /* byte order mark */
     doc_t d = {text, len, NULL, 0, 0};
-    if (!find_fences(&d)) {
+    if (!find_fences(&d, pos)) {
         free(d.fences);
         return false;
     }
 
     line_cursor_t starts = {0, 1}, ends = {0, 1};
-    size_t pos = 0;
     size_t min_end = 0; /* a cut must leave the chunk longer than the previous one */
-    if (len >= 3 && (unsigned char)text[0] == 0xEF && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF)
-        pos = 3; /* byte order mark */
 
     bool ok = true;
     for (;;) {

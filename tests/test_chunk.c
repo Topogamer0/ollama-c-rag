@@ -203,6 +203,30 @@ static void test_markdown(void) {
     if (l.count >= 1) CHECK_SIZE(l.items[0].end, 36);
     rag_chunk_list_free(&l);
 
+    /* a heading followed by a blank line starts the next chunk, it does not end the previous one */
+    text = "Intro text here and more.\n\n# Title\n\nBody text follows here.";
+    l = split(text, 40, 0);
+    CHECK_SIZE(l.count, 2);
+    if (l.count == 2) {
+        CHECK_SIZE(l.items[0].end, 25);
+        CHECK(strncmp(text + l.items[1].start, "# Title", 7) == 0);
+    }
+    rag_chunk_list_free(&l);
+
+    /* a fence on the first line, after a byte order mark */
+    text = "\xEF\xBB\xBF```\n# comment\n```\nalpha beta gamma\n## Next\nepsilon zeta eta theta iota";
+    l = split(text, 50, 0);
+    CHECK(l.count >= 1);
+    if (l.count >= 1) CHECK_SIZE(l.items[0].end, 37);
+    rag_chunk_list_free(&l);
+
+    /* ```code``` on one line is not a fence */
+    text = "```inline```\nalpha beta gamma delta\n# Title\nepsilon zeta eta theta iota";
+    l = split(text, 50, 0);
+    CHECK(l.count >= 1);
+    if (l.count >= 1) CHECK_SIZE(l.items[0].end, 35);
+    rag_chunk_list_free(&l);
+
     /* an unterminated block runs to the end of the text */
     text = "```\nalpha beta gamma delta\n# Title\nepsilon zeta eta theta iota";
     l = split(text, 40, 0);
@@ -239,6 +263,25 @@ static void test_sentences(void) {
     rag_chunk_list_free(&l);
     free(text);
 
+    /* list numbers and abbreviations do not end sentences */
+    buf_t list = {0};
+    for (int i = 1; i <= 30; i++) rag_buf_printf(&list, "%d. item number %d about fruit\n", i, i);
+    l = split(list.data, 60, 0);
+    CHECK(l.count > 5);
+    for (size_t k = 0; k < l.count; k++) {
+        CHECK(list.data[l.items[k].start] >= '1' && list.data[l.items[k].start] <= '9');
+        CHECK(list.data[l.items[k].end] == '\n' || l.items[k].end == list.len);
+    }
+    check_invariants(list.data, list.len, 60, 0, &l);
+    rag_chunk_list_free(&l);
+    rag_buf_free(&list);
+    text = repeat("Use some tools e.g. hammers and saws for the job\n", 20);
+    len = strlen(text);
+    l = split(text, 60, 0);
+    for (size_t k = 0; k + 1 < l.count; k++) CHECK(text[l.items[k].end] == '\n');
+    rag_chunk_list_free(&l);
+    free(text);
+
     /* ideographic full stops */
     text = repeat("日本語の文です。", 50);
     len = strlen(text);
@@ -247,6 +290,24 @@ static void test_sentences(void) {
     for (size_t k = 0; k + 1 < l.count; k++) CHECK(memcmp(text + l.items[k].end - 3, "。", 3) == 0);
     check_invariants(text, len, 30, 0, &l);
     rag_chunk_list_free(&l);
+    free(text);
+
+    /* ...before a line break, and followed by a closing bracket */
+    text = repeat("日本語の文です。\n", 30);
+    len = strlen(text);
+    l = split(text, 20, 0);
+    for (size_t k = 0; k + 1 < l.count; k++) CHECK(memcmp(text + l.items[k].end - 3, "。", 3) == 0);
+    rag_chunk_list_free(&l);
+    free(text);
+    text = repeat("「日本語です。」次の文です。", 20);
+    len = strlen(text);
+    for (size_t size = 8; size <= 40; size++) {
+        l = split(text, size, 0);
+        CHECK(l.count > 5);
+        for (size_t k = 0; k < l.count; k++) CHECK(memcmp(text + l.items[k].start, "」", 3) != 0);
+        check_invariants(text, len, size, 0, &l);
+        rag_chunk_list_free(&l);
+    }
     free(text);
 }
 
@@ -346,6 +407,15 @@ static void test_overlap(void) {
     rag_chunk_list_free(&ll);
     free(lines);
 
+    /* a line after a sentence is a better start than a sentence in the middle of a line */
+    lines = repeat("Alpha beta. Gamma delta epsilon.\n", 20);
+    ll = split(lines, 120, 80);
+    CHECK(ll.count > 3);
+    for (size_t k = 1; k < ll.count; k++) CHECK(lines[ll.items[k].start - 1] == '\n');
+    check_invariants(lines, strlen(lines), 120, 80, &ll);
+    rag_chunk_list_free(&ll);
+    free(lines);
+
     /* no overlap */
     l = split(text, 800, 0);
     for (size_t k = 1; k < l.count; k++) CHECK(l.items[k].start > l.items[k - 1].end);
@@ -360,6 +430,27 @@ static void test_overlap(void) {
     check_invariants("abc def ghi", 11, 5, 4, &l);
     rag_chunk_list_free(&l);
     rag_buf_free(&b);
+}
+
+static void test_large_overlap(void) {
+    /* chunks cut at paragraphs can be shorter than the overlap: they still overlap */
+    char *para = repeat("This sentence has words. ", 10);
+    para[strlen(para) - 1] = '\0';
+    buf_t b = {0};
+    for (int i = 0; i < 6; i++) {
+        if (i) rag_buf_puts(&b, "\n\n");
+        rag_buf_puts(&b, para);
+    }
+    const size_t overlaps[] = {600, 700, 799, 1000};
+    for (size_t i = 0; i < sizeof(overlaps) / sizeof(overlaps[0]); i++) {
+        chunk_list_t l = split(b.data, 800, overlaps[i]);
+        CHECK(l.count >= 2);
+        for (size_t k = 1; k < l.count; k++) CHECK(l.items[k].start < l.items[k - 1].end);
+        check_invariants(b.data, b.len, 800, overlaps[i] < 800 ? overlaps[i] : 799, &l);
+        rag_chunk_list_free(&l);
+    }
+    rag_buf_free(&b);
+    free(para);
 }
 
 static void test_long_whitespace_runs(void) {
@@ -422,6 +513,16 @@ static void test_random_texts(void) {
 static void test_utf8(void) {
     const char *s = "aè€😀";
     CHECK_SIZE(rag_utf8_count(s, 0, strlen(s)), 4);
+    /* every invalid byte is a character */
+    CHECK_SIZE(rag_utf8_count("\xe2\x82", 0, 2), 2);
+    CHECK_SIZE(rag_utf8_char_len("\xe2\x82", 2, 0), 1);
+    CHECK_SIZE(rag_utf8_advance("\xe2\x82", 2, 0, 1), 1);
+    CHECK_SIZE(rag_utf8_count("\xff\xfe abc \xc3 def \xe2\x82", 0, 16), 16);
+    CHECK_SIZE(rag_utf8_char_len("\xc3\xa8", 2, 0), 2);
+    CHECK_SIZE(rag_utf8_char_len("\xc3\xa8", 1, 0), 1); /* cut by the end of the text */
+    chunk_list_t l = split("ab\xe2\x82", 1, 0);
+    CHECK_SIZE(l.count, 4);
+    rag_chunk_list_free(&l);
     CHECK_SIZE(rag_utf8_advance(s, strlen(s), 0, 2), 3);
     CHECK_SIZE(rag_utf8_advance(s, strlen(s), 0, 100), strlen(s));
 
@@ -460,6 +561,7 @@ int main(void) {
     RUN(test_hard_cut);
     RUN(test_utf8_characters);
     RUN(test_overlap);
+    RUN(test_large_overlap);
     RUN(test_long_whitespace_runs);
     RUN(test_random_texts);
     RUN(test_utf8);
