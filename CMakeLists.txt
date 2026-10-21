@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 project(ollama-rag-c
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Local Retrieval-Augmented Generation in C, with Ollama and SQLite"
     LANGUAGES C)
 

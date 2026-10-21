@@ -3,6 +3,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(ollama-rag-c-consumer LANGUAGES C)
 
-find_package(ollama-rag-c 0.1 REQUIRED)
+find_package(ollama-rag-c 0.2 REQUIRED)
 add_executable(consumer main.c)
 target_link_libraries(consumer PRIVATE ollama::rag)
