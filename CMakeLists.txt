@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
+# MSVC: no /W3 in the default flags, which /W4 would override with a warning per file
+if(POLICY CMP0092)
+    cmake_policy(SET CMP0092 NEW)
+endif()
 
 project(ollama-rag-c
     VERSION 0.2.0
@@ -205,6 +209,9 @@ if(RAG_INSTALL)
             set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
             include(InstallRequiredSystemLibraries)
             list(FILTER CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS INCLUDE REGEX "vcruntime[^/]*\\.dll$")
+            if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+                message(FATAL_ERROR "RAG_INSTALL_RUNTIME_DLLS: the C runtime (vcruntime140.dll) was not found")
+            endif()
             install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION ${CMAKE_INSTALL_BINDIR})
         endif()
     elseif(RAG_BUILD_CLI)

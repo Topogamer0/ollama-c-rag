@@ -40,6 +40,11 @@ jobs:
           $name = "ragc-$version-windows-x64"
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item install/bin/ragc.exe, install/bin/*.dll, README.md, LICENSE $name
+          # the licenses of what ragc.exe contains (Ollama-C) and of the DLLs (libcurl, zlib)
+          $share = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share"
+          Copy-Item install/share/doc/ollama-c/LICENSE "$name/LICENSE-ollama-c.txt"
+          Copy-Item "$share/curl/copyright" "$name/LICENSE-curl.txt"
+          Copy-Item "$share/zlib/copyright" "$name/LICENSE-zlib.txt"
           Get-ChildItem $name | Format-Table Name, Length
           # it must run from its own directory, with nothing else on PATH
           $path = $env:PATH
