@@ -910,6 +910,42 @@ static void test_open_fails_without_changes(void) {
     CHECK(!file_exists(path_of(tmp, "never.db")));
 }
 
+/*
+ * A file renamed in another case is still there under its old name where
+ * names do not depend on case (Windows): it is removed all the same.
+ */
+static void test_renamed_in_case(void) {
+    char *dir = dup_string(path_of(tmp, "case"));
+    write_file(path_of(dir, "Fruit.md"), "Bananas are yellow.");
+    write_file(path_of(dir, "Other.md"), "Apples are red.");
+    rag_t *rag = open_index("case.db", (rag_options_t){0});
+    rag_index_stats_t stats;
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 2);
+
+    /* like a rename, which Wine does not do when only the case changes */
+    CHECK(remove_file(path_of(dir, "Fruit.md")));
+    write_file(path_of(dir, "fruit.md"), "Bananas are yellow.");
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    CHECK_SIZE(stats.files_unchanged, 1);
+    CHECK_SIZE(stats.files_removed, 1);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 2);
+    rag_results_t *r = NULL;
+    CHECK(rag_search(rag, "bananas yellow", NULL, &r) == RAG_OK);
+    CHECK(r && r->count == 2);
+    if (r && r->count > 0) CHECK_STR(r->items[0].path, path_of(dir, "fruit.md"));
+    rag_results_free(r);
+
+    /* indexing the file again finds it up to date */
+    CHECK(rag_add_file(rag, path_of(dir, "fruit.md"), &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_unchanged, 1);
+    rag_close(rag);
+    free(dir);
+}
+
 static void test_empty_index(void) {
     rag_t *rag = open_index("empty.db", (rag_options_t){0});
     rag_results_t *r = NULL;
@@ -945,6 +981,7 @@ int main(void) {
     RUN(test_removal_with_reused_ids);
     RUN(test_file_removed_while_indexed);
     RUN(test_open_fails_without_changes);
+    RUN(test_renamed_in_case);
     RUN(test_empty_index);
 
     remove_tree(tmp);

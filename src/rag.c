@@ -426,7 +426,7 @@ rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *st
         for (size_t i = 0; i < files.count; i++) list[i] = &files.items[i];
         st = rag_remove_listed(rag, list, files.count, stats, 0, 0);
     }
-    free(list);
+    free((void *)list); /* not const for MSVC (C4090) */
     rag_db_file_list_free(&files);
     return st;
 }

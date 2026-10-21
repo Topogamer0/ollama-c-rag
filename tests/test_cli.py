@@ -216,6 +216,10 @@ def main():
         r = ragc('index', 'todo.org', cwd=tmp)
         check(r.returncode == 0 and '1 indexed' in r.stdout and 'indexed  todo.org (1 chunk)' in r.stderr,
               'index a file', r)
+        with open(os.path.join(tmp, 'utf16.txt'), 'wb') as f:
+            f.write('\ufeffNotes saved by PowerShell 5.'.encode('utf-16-le'))
+        r = ragc('index', 'utf16.txt', cwd=tmp)
+        check(r.returncode == 1 and "'utf16.txt' is UTF-16 text: save it as UTF-8" in r.stderr, 'UTF-16 files', r)
         r = ragc('index', 'missing.md', cwd=tmp)
         check(r.returncode == 1 and 'missing.md' in r.stderr, 'index a missing file', r)
 

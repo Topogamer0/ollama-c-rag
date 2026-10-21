@@ -163,16 +163,24 @@ static void print_lines(const rag_result_t *r) {
         printf("%zu-%zu", r->line_start, r->line_end);
 }
 
-/* Prints a text with every line indented; "\r\n" ends a line too. */
+/*
+ * Prints a text with every line indented, a line at a time (the console of
+ * Windows shows a character cut between two writes as garbage). "\r\n" ends
+ * a line too: stdout writes the line ends of the system.
+ */
 static void print_indented(const char *text, const char *indent) {
-    bool line_start = true;
-    for (const char *p = text; *p; p++) {
-        if (*p == '\r' && p[1] == '\n') continue; /* stdout writes the line ends of the system */
-        if (line_start && *p != '\n') fputs(indent, stdout); /* no spaces on empty lines */
-        putchar(*p);
-        line_start = *p == '\n';
+    for (const char *line = text;;) {
+        const char *end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        if (len > 0 && line[len - 1] == '\r') len--;
+        if (len > 0) { /* no spaces on empty lines */
+            fputs(indent, stdout);
+            fwrite(line, 1, len, stdout);
+        }
+        putchar('\n');
+        if (!end) break;
+        line = end + 1;
     }
-    putchar('\n');
 }
 
 static void format_size(char *out, size_t size, uint64_t bytes) {
@@ -575,6 +583,15 @@ static int finish(int code) {
 }
 
 #ifdef _WIN32
+static UINT console_page; /* the code page of the console, to restore */
+
+/* Ctrl+C and the like: the console gets its code page back before the process ends. */
+static BOOL WINAPI on_console_event(DWORD event) {
+    (void)event;
+    SetConsoleOutputCP(console_page);
+    return FALSE; /* the default handler ends the process */
+}
+
 /* The arguments in UTF-16, so that any of them can be passed (main() would get them in the ANSI code page). */
 int wmain(int argc, wchar_t **wargv);
 int wmain(int argc, wchar_t **wargv) {
@@ -584,10 +601,11 @@ int wmain(int argc, wchar_t **wargv) {
     int code = 1;
     if (ok) {
         /* the documents are in UTF-8, and so is the output: show it as such in the console */
-        UINT page = GetConsoleOutputCP();
-        if (page != CP_UTF8) SetConsoleOutputCP(CP_UTF8);
+        console_page = GetConsoleOutputCP();
+        bool switched = console_page != 0 && console_page != CP_UTF8 && SetConsoleCtrlHandler(on_console_event, TRUE) &&
+                        SetConsoleOutputCP(CP_UTF8);
         code = finish(run(argc, argv));
-        if (page != 0 && page != CP_UTF8) SetConsoleOutputCP(page);
+        if (switched) SetConsoleOutputCP(console_page);
     } else {
         fputs("ragc: out of memory\n", stderr);
     }

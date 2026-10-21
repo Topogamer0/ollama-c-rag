@@ -136,6 +136,7 @@ char *rag_fs_canonical(const char *path, err_t *e) {
 }
 
 rag_status_t rag_fs_stat(const char *path, fs_info_t *info, err_t *e) {
+    *info = (fs_info_t){0};
     os_stat_t st;
     os_error_t oe;
     if (!rag_os_stat(path, true, &st, &oe)) {

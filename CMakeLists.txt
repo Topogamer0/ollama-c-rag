@@ -239,7 +239,8 @@ if(RAG_INSTALL)
     if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
         set(RAG_PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
     else()
-        file(RELATIVE_PATH RAG_PC_RELATIVE "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
+        file(RELATIVE_PATH RAG_PC_RELATIVE "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+            "${CMAKE_INSTALL_PREFIX}") # full paths, also on Windows
         set(RAG_PC_PREFIX "\${pcfiledir}/${RAG_PC_RELATIVE}")
     endif()
     # a static library needs its dependencies on the link line of its users
