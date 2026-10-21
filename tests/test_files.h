@@ -91,9 +91,12 @@ static inline void remove_tree(const char *path) {
         struct dirent *ent;
         while (d && (ent = readdir(d)) != NULL) {
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-            char child[4096];
-            snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+            size_t n = strlen(path) + strlen(ent->d_name) + 2;
+            char *child = malloc(n);
+            if (!child) exit(2);
+            snprintf(child, n, "%s/%s", path, ent->d_name);
             remove_tree(child);
+            free(child);
         }
         if (d) closedir(d);
         rmdir(path);

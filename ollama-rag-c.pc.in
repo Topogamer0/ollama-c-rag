@@ -1,0 +1,12 @@
+prefix=@RAG_PC_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: ollama-rag-c
+Description: @PROJECT_DESCRIPTION@
+URL: https://github.com/Topogamer0/ollama-c-rag
+Version: @PROJECT_VERSION@
+@RAG_PC_REQUIRES@: ollama-c@RAG_PC_SQLITE@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lollama-rag@RAG_PC_LIBS@
+Libs.private:@RAG_PC_LIBS_PRIVATE@
