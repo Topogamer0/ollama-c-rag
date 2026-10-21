@@ -76,7 +76,7 @@ cmake --build build --config Release
 ctest --test-dir build -C Release
 ```
 
-`ragc.exe` is then in `build\bin\Release`, next to `libcurl.dll` and `zlib1.dll` (vcpkg copies the DLLs
+`ragc.exe` is then in `build\bin\Release`, next to the DLLs of libcurl and zlib (vcpkg copies the DLLs
 that programs need), along with the examples and the tests. Configure with
 `-DRAG_INSTALL_RUNTIME_DLLS=ON` to have `cmake --install build --config Release --prefix C:\ragc`
 put these DLLs, and the C runtime of the compiler, next to the installed `ragc.exe`, so that the

@@ -52,7 +52,7 @@ jobs:
 
   macos:
     name: macOS (sanitizers=${{ matrix.sanitizers }})
-    runs-on: macos-latest
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
