@@ -25,7 +25,19 @@ extern "C" {
 #define RAG_VERSION_PATCH 0
 #define RAG_VERSION "0.1.0"
 
-#if defined(__GNUC__) && __GNUC__ >= 4
+/*
+ * The functions of the library. A Windows DLL exports them (RAG_BUILDING_SHARED)
+ * and its users import them (RAG_SHARED, set by the CMake target).
+ */
+#if defined(_WIN32)
+#if defined(RAG_BUILDING_SHARED)
+#define RAG_API __declspec(dllexport)
+#elif defined(RAG_SHARED)
+#define RAG_API __declspec(dllimport)
+#else
+#define RAG_API
+#endif
+#elif defined(__GNUC__) && __GNUC__ >= 4
 #define RAG_API __attribute__((visibility("default")))
 #else
 #define RAG_API
@@ -157,6 +169,11 @@ RAG_API const rag_error_t *rag_last_error(const rag_t *rag);
 
 /* ===========================================================================
  * Indexing
+ *
+ * Paths are UTF-8 strings, also on Windows, relative to the current directory
+ * or absolute. The index stores them absolute, with the links of their
+ * directories resolved; on Windows with "\" separators ("/" is accepted too)
+ * and with the names spelled as on the disk.
  * ======================================================================== */
 
 /* Counts of what a call did; every call resets them. */

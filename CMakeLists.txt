@@ -18,11 +18,24 @@ option(RAG_BUILD_TESTS "Build the tests" ${RAG_TOP_LEVEL})
 option(RAG_INSTALL "Generate the install target" ${RAG_TOP_LEVEL})
 option(RAG_USE_SYSTEM_SQLITE "Link the system SQLite instead of the bundled amalgamation" OFF)
 option(RAG_USE_SYSTEM_OLLAMA_C "Use an installed ollama-c instead of downloading it" OFF)
+option(RAG_WERROR "Treat the warnings of ollama-rag-c (not of its dependencies) as errors" OFF)
+option(RAG_INSTALL_RUNTIME_DLLS "Windows: install the DLLs that ragc needs (libcurl, the C runtime) next to it" OFF)
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     set(RAG_WARNINGS -Wall -Wextra -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wvla)
+    if(RAG_WERROR)
+        list(APPEND RAG_WARNINGS -Werror)
+    endif()
 elseif(MSVC)
     set(RAG_WARNINGS /W4)
+    if(RAG_WERROR)
+        list(APPEND RAG_WARNINGS /WX)
+    endif()
+endif()
+
+# On Windows, programs find their DLLs in their own directory: put them all together.
+if(WIN32 AND RAG_TOP_LEVEL AND NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 endif()
 
 # ---- dependencies ----
@@ -44,6 +57,12 @@ endif()
 
 # after Ollama-C, so that it keeps its own documentation directory
 include(GNUInstallDirs)
+
+if(MSVC)
+    # for our sources only: they are UTF-8, and they use the standard C functions (fopen, strerror, ...)
+    add_compile_options(/utf-8)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
 
 if(RAG_USE_SYSTEM_SQLITE)
     find_package(SQLite3 REQUIRED)
@@ -91,6 +110,7 @@ endfunction()
 set(RAG_SOURCES
     src/ask.c
     src/chunk.c
+    src/compat.c
     src/db.c
     src/embed.c
     src/fs.c
@@ -109,6 +129,10 @@ target_include_directories(ollama_rag PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 rag_link_dependencies(ollama_rag)
 target_compile_options(ollama_rag PRIVATE ${RAG_WARNINGS})
+if(BUILD_SHARED_LIBS)
+    # the functions marked RAG_API are exported from the DLL, and imported by its users
+    target_compile_definitions(ollama_rag PRIVATE RAG_BUILDING_SHARED INTERFACE RAG_SHARED)
+endif()
 set_target_properties(ollama_rag PROPERTIES
     OUTPUT_NAME ollama-rag
     EXPORT_NAME rag
@@ -120,10 +144,15 @@ set_target_properties(ollama_rag PROPERTIES
     SOVERSION ${PROJECT_VERSION_MAJOR})
 
 if(RAG_BUILD_CLI)
-    add_executable(ragc cli/ragc.c)
+    # ragc uses the portability layer of the library too: a copy of its own, since a DLL does not export it
+    add_executable(ragc cli/ragc.c src/compat.c)
+    target_include_directories(ragc PRIVATE src)
     target_link_libraries(ragc PRIVATE ollama::rag)
     target_compile_options(ragc PRIVATE ${RAG_WARNINGS})
     set_target_properties(ragc PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    if(MINGW)
+        target_link_options(ragc PRIVATE -municode) # wmain()
+    endif()
 endif()
 
 # installed shared libraries find each other, and ragc finds them
@@ -160,6 +189,15 @@ if(RAG_INSTALL)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     if(RAG_BUILD_CLI)
         install(TARGETS ragc RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        if(WIN32 AND RAG_INSTALL_RUNTIME_DLLS)
+            # a ragc.exe that runs on its own: libcurl and its dependencies, and the C runtime of the compiler
+            if(CMAKE_VERSION VERSION_LESS 3.21)
+                message(FATAL_ERROR "RAG_INSTALL_RUNTIME_DLLS needs CMake 3.21 or later")
+            endif()
+            install(FILES $<TARGET_RUNTIME_DLLS:ragc> DESTINATION ${CMAKE_INSTALL_BINDIR})
+            set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
+            include(InstallRequiredSystemLibraries)
+        endif()
     endif()
     install(FILES include/ollama_rag.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
     install(FILES LICENSE README.md DESTINATION ${RAG_DOCDIR})

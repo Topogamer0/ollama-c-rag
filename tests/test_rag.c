@@ -2,8 +2,10 @@
  * Integration tests of the public API against tests/mock_server.py, which
  * starts a fake Ollama server and runs this program with OLLAMA_HOST set.
  */
+#ifndef _WIN32
 #define _XOPEN_SOURCE 700
-#define _DARWIN_C_SOURCE /* mkdtemp() on macOS */
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "ollama_rag.h"
 #include "test.h"
@@ -98,7 +100,7 @@ static int on_progress(const rag_progress_t *p, void *data) {
         snprintf(ev->failure, sizeof(ev->failure), "%s", p->message ? p->message : "");
         break;
     }
-    CHECK(p->path && p->path[0] == '/');
+    CHECK(p->path && rag_os_root_len(p->path) > 0); /* absolute */
     CHECK(p->done <= p->total);
     ev->last_done = p->done;
     ev->total = p->total;
@@ -283,7 +285,7 @@ static void test_incremental(void) {
 
     /* a deleted file */
     char *cooking = dup_string(path_of(docs, "sub/cooking.md"));
-    unlink(cooking);
+    remove_file(cooking);
     CHECK(rag_add_dir(rag, docs, &stats) == RAG_OK);
     CHECK_SIZE(stats.files_removed, 1);
     CHECK(stats.chunks_removed >= 1);
@@ -317,13 +319,13 @@ static void test_incremental(void) {
     CHECK_SIZE(info.files, 5);
 
     /* relative paths */
-    char *cwd = getcwd(NULL, 0);
-    CHECK(chdir(docs) == 0);
+    char *cwd = current_dir();
+    CHECK(change_dir(docs));
     CHECK(rag_add_file(rag, "./fruit.md", &stats) == RAG_OK);
     CHECK_SIZE(stats.files_unchanged, 1);
     CHECK(rag_add_dir(rag, ".", &stats) == RAG_OK);
     CHECK_SIZE(stats.files_indexed, 0);
-    CHECK(chdir(cwd) == 0);
+    CHECK(change_dir(cwd));
     free(cwd);
 
     CHECK(rag_add_dir(rag, path_of(docs, "fruit.md"), &stats) == RAG_ERROR_INVALID);
@@ -377,7 +379,7 @@ static void test_model_mismatch(void) {
     CHECK(r == NULL);
     rag_close(rag);
     mock_reset();
-    unlink(path_of(docs, "new.md"));
+    remove_file(path_of(docs, "new.md"));
 }
 
 static void test_prefixes(void) {
@@ -470,7 +472,7 @@ static void test_interrupted(void) {
     }
     rag_results_free(r);
     rag_close(rag);
-    unlink(path_of(docs, "big.md"));
+    remove_file(path_of(docs, "big.md"));
 }
 
 static void test_abort(void) {

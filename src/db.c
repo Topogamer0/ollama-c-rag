@@ -1,6 +1,7 @@
 /* SQLite storage of the index. */
 #include "internal.h"
 
+#include "compat.h"
 #include "sqlite3.h"
 
 #include <stdio.h>
@@ -300,16 +301,19 @@ rag_status_t rag_db_find_file(rag_t *rag, const char *path, db_file_t *out, bool
 }
 
 rag_status_t rag_db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
-    /* paths starting with "dir/" are the ones in ["dir/", "dir0"): '0' follows '/' */
+    /*
+     * paths starting with "dir/" are the ones in ["dir/", "dir0"): '0' follows
+     * '/'; on Windows, "dir\" and "dir]"
+     */
     size_t n = strlen(dir);
-    char *lower = n > 0 && dir[n - 1] == '/' ? rag_strdup(dir) : rag_format("%s/", dir);
+    char *lower = n > 0 && dir[n - 1] == RAG_PATH_SEP ? rag_strdup(dir) : rag_format("%s%c", dir, RAG_PATH_SEP);
     char *upper = rag_strdup(lower);
     if (!lower || !upper) {
         free(lower);
         free(upper);
         return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     }
-    upper[strlen(upper) - 1] = '0';
+    upper[strlen(upper) - 1] = (char)(RAG_PATH_SEP + 1);
 
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag,

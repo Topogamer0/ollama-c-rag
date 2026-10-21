@@ -3,6 +3,9 @@
 Tests of the ragc command line tool, run by mock_server.py:
 
     mock_server.py python3 test_cli.py <path to ragc>
+
+Set RAGC_TEST_WINDOWS=1 when <path to ragc> runs a Windows ragc.exe from
+another system (a script that runs it with Wine): it shows paths with "\\".
 """
 
 import json
@@ -14,8 +17,14 @@ import urllib.request
 
 RAGC = os.path.abspath(sys.argv[1])
 HOST = os.environ['OLLAMA_HOST']
+WINDOWS = os.name == 'nt' or os.environ.get('RAGC_TEST_WINDOWS') == '1'
 failures = 0
 checks = 0
+
+
+def p(path):
+    """A relative path as ragc shows it: with the separators of its system."""
+    return path.replace('/', '\\') if WINDOWS else path
 
 
 def check(condition, message, result=None):
@@ -32,7 +41,8 @@ def check(condition, message, result=None):
 def ragc(*args, cwd, env=None):
     clean = {k: v for k, v in os.environ.items() if not k.startswith('RAGC_')}
     clean.update(env or {})
-    return subprocess.run([RAGC, *args], cwd=cwd, env=clean, capture_output=True, text=True)
+    # ragc writes UTF-8, whatever the code page of the system
+    return subprocess.run([RAGC, *args], cwd=cwd, env=clean, capture_output=True, encoding='utf-8', errors='replace')
 
 
 def mock(path, body=None):
@@ -43,7 +53,7 @@ def mock(path, body=None):
 
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(text)
 
 
@@ -81,9 +91,9 @@ def main():
         # index
         r = ragc('-e', 'mock-embed', '--chunk-size', '80', '--chunk-overlap', '10', 'index', 'notes', cwd=tmp)
         check(r.returncode == 0, 'index', r)
-        check('indexed  notes/fruit.md (2 chunks)' in r.stderr, 'index progress', r)
-        check('skipped  notes/image.txt: ' in r.stderr and 'binary' in r.stderr, 'binary files are skipped', r)
-        check("'/" not in r.stderr, 'paths are relative', r)
+        check(f'indexed  {p("notes/fruit.md")} (2 chunks)' in r.stderr, 'index progress', r)
+        check(f'skipped  {p("notes/image.txt")}: ' in r.stderr and 'binary' in r.stderr, 'binary files are skipped', r)
+        check(tmp not in r.stderr and "'/" not in r.stderr, 'paths are relative', r)
         check('3 indexed, 0 unchanged, 0 removed, 1 skipped' in r.stdout, 'index summary', r)
 
         r = ragc('-q', 'index', 'notes', cwd=tmp)
@@ -98,10 +108,10 @@ def main():
 
         # search, with or without quotes
         r = ragc('search', 'yellow', 'bananas', 'potassium', cwd=tmp)
-        check(r.returncode == 0 and r.stdout.startswith('1. notes/fruit.md:1-3  (score '), 'search', r)
+        check(r.returncode == 0 and r.stdout.startswith(f'1. {p("notes/fruit.md")}:1-3  (score '), 'search', r)
         check('   Bananas are yellow' in r.stdout and '\n2. ' in r.stdout, 'search results', r)
         r = ragc('-k', '1', 'search', 'Mars red planet', cwd=tmp)
-        check(r.returncode == 0 and 'notes/space.md' in r.stdout and '\n2. ' not in r.stdout, 'top-k', r)
+        check(r.returncode == 0 and p('notes/space.md') in r.stdout and '\n2. ' not in r.stdout, 'top-k', r)
         r = ragc('--min-score=0.999', 'search', 'bananas', cwd=tmp)
         check(r.returncode == 0 and r.stdout == '' and 'nothing found' in r.stderr, 'min-score', r)
         r = ragc('search', 'bananas', cwd=notes)
@@ -114,7 +124,7 @@ def main():
         r = ragc('-m', 'mock-chat', 'ask', 'What', 'color', 'are', 'bananas?', cwd=tmp)
         check(r.returncode == 0, 'ask', r)
         check(r.stdout.startswith('Found 5 sources [1]. You asked: What color are bananas?\n'), 'answer', r)
-        check('\nSources:\n  [1] notes/fruit.md:1-3 (score ' in r.stdout, 'sources', r)
+        check(f'\nSources:\n  [1] {p("notes/fruit.md")}:1-3 (score ' in r.stdout, 'sources', r)
         last = mock('/_last')
         body = json.loads(last['body'])
         check(last['path'] == '/api/chat' and body['model'] == 'mock-chat', 'chat request')
@@ -176,7 +186,7 @@ def main():
         check(r.returncode == 2 and '--batch-size' in r.stderr, 'huge batch size', r)
 
         # an output that cannot be written is an error
-        if os.path.exists('/dev/full'):
+        if os.path.exists('/dev/full') and not WINDOWS:
             with open('/dev/full', 'w') as full:
                 r = subprocess.run([RAGC, 'stats'], cwd=tmp, stdout=full, stderr=subprocess.PIPE, text=True)
             check(r.returncode == 1 and 'cannot write' in r.stderr, 'stdout full', r)
@@ -191,7 +201,7 @@ def main():
         os.remove(os.path.join(notes, 'sub', 'cooking.txt'))
         r = ragc('index', 'notes', cwd=tmp)
         check(r.returncode == 0 and '1 indexed, 1 unchanged, 1 removed' in r.stdout, 'incremental index', r)
-        check('removed  notes/sub/cooking.txt' in r.stderr, 'removed file', r)
+        check(f'removed  {p("notes/sub/cooking.txt")}' in r.stderr, 'removed file', r)
 
         # a single file, any extension
         write(os.path.join(tmp, 'todo.org'), 'Buy tomatoes and basil.')
@@ -210,18 +220,19 @@ def main():
         check(r.returncode == 1 and 'binary' in r.stderr and '1 indexed' in r.stdout and '1 skipped' in r.stdout,
               'index several files, one of them binary', r)
 
-        # paths are made relative only where they start
-        deep = os.path.join(tmp, 'm' + tmp, 'w')
-        os.makedirs(deep)
-        os.makedirs(os.path.join(tmp, 'w'), exist_ok=True)
-        with open(os.path.join(deep, 'bad.txt'), 'wb') as f:
-            f.write(b'\x00')
-        r = ragc('--db', '../ragc.db', 'index', os.path.join(deep, 'bad.txt'), cwd=os.path.join(tmp, 'w'))
-        check(r.returncode == 1 and os.path.join(deep, 'bad.txt') in r.stderr, 'paths in messages', r)
+        # paths are made relative only where they start (on Windows, ":" cannot be in a name)
+        if not WINDOWS:
+            deep = os.path.join(tmp, 'm' + tmp, 'w')
+            os.makedirs(deep)
+            os.makedirs(os.path.join(tmp, 'w'), exist_ok=True)
+            with open(os.path.join(deep, 'bad.txt'), 'wb') as f:
+                f.write(b'\x00')
+            r = ragc('--db', '../ragc.db', 'index', os.path.join(deep, 'bad.txt'), cwd=os.path.join(tmp, 'w'))
+            check(r.returncode == 1 and os.path.join(deep, 'bad.txt') in r.stderr, 'paths in messages', r)
 
         # remove
         r = ragc('remove', 'notes/fruit.md', 'todo.org', cwd=tmp)
-        check(r.returncode == 0 and '2 files removed' in r.stdout and 'removed  notes/fruit.md' in r.stderr,
+        check(r.returncode == 0 and '2 files removed' in r.stdout and f'removed  {p("notes/fruit.md")}' in r.stderr,
               'remove', r)
         r = ragc('remove', 'notes/fruit.md', cwd=tmp)
         check(r.returncode == 1 and 'not in the index' in r.stderr, 'remove twice', r)
@@ -239,6 +250,27 @@ def main():
         check(r.returncode == 0 and os.path.exists(os.path.join(tmp, 'env.db')), 'RAGC_DB', r)
         r = ragc('stats', cwd=tmp, env={'RAGC_DB': 'env.db'})
         check(r.returncode == 0 and 'env.db' in r.stdout and 'mock-embed' in r.stdout, 'stats of RAGC_DB', r)
+
+        # spaces and characters that are not ASCII, in paths, arguments and the environment
+        write(os.path.join(tmp, 'note città', 'perché è.md'), '# Città\n\nCaffè e cornetti a colazione, perché no.\n')
+        r = ragc('--db', 'unicode.db', '-e', 'mock-embed', 'index', 'note città', cwd=tmp)
+        check(r.returncode == 0 and f'indexed  {p("note città/perché è.md")} (1 chunk)' in r.stderr, 'index città', r)
+        r = ragc('--db', 'unicode.db', 'search', 'caffè', 'colazione', cwd=tmp)
+        check(r.returncode == 0 and r.stdout.startswith(f'1. {p("note città/perché è.md")}:1-3') and
+              'Caffè e cornetti' in r.stdout, 'search caffè', r)
+        r = ragc('-m', 'mock-chat', 'ask', 'perché', 'il', 'caffè?', cwd=tmp, env={'RAGC_DB': 'unicode.db'})
+        check(r.returncode == 0 and 'You asked: perché il caffè?' in r.stdout and p('note città/perché è.md') in r.stdout,
+              'ask in Italian', r)
+        r = ragc('stats', cwd=tmp, env={'RAGC_DB': 'banca dati è.db'})
+        check(r.returncode == 1 and 'banca dati è.db' in r.stderr, 'RAGC_DB with characters that are not ASCII', r)
+        r = ragc('--db', 'unicode.db', 'remove', 'note città/perché è.md', cwd=tmp)
+        check(r.returncode == 0 and '1 file removed' in r.stdout, 'remove città', r)
+        if WINDOWS:
+            # both separators, any case
+            r = ragc('--db', 'unicode.db', 'index', 'NOTE CITTÀ\\PERCHÉ È.MD', cwd=tmp)
+            check(r.returncode == 0 and f'indexed  {p("note città/perché è.md")}' in r.stderr, 'index in capitals', r)
+            r = ragc('--db', 'unicode.db', 'remove', 'note città\\perché è.md', cwd=tmp)
+            check(r.returncode == 0 and '1 file removed' in r.stdout, 'remove with backslashes', r)
 
     print(f'{checks} checks, {failures} failures')
     return 1 if failures else 0
