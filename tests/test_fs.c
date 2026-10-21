@@ -1,5 +1,6 @@
 /* Unit tests of the file helpers and of SHA-256. */
 #define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE /* mkdtemp() on macOS */
 
 #include "internal.h"
 #include "test.h"

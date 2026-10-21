@@ -3,6 +3,7 @@
  * starts a fake Ollama server and runs this program with OLLAMA_HOST set.
  */
 #define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE /* mkdtemp() on macOS */
 
 #include "ollama_rag.h"
 #include "test.h"

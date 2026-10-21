@@ -1,5 +1,6 @@
 /*
- * Temporary files for the tests (POSIX). Define _XOPEN_SOURCE 700
+ * Temporary files for the tests (POSIX). Define _XOPEN_SOURCE 700 (and
+ * _DARWIN_C_SOURCE for macOS)
  * before including any header.
  */
 #ifndef RAG_TEST_FILES_H

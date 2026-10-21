@@ -1,5 +1,6 @@
 /* Unit tests of the database: schema, settings, embedding model checks, removal. */
 #define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE /* mkdtemp() on macOS */
 
 #include "internal.h"
 #include "sqlite3.h"
