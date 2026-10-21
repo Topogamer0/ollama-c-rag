@@ -117,7 +117,11 @@ static rag_t *open_index(const char *name, rag_options_t options) {
 }
 
 static void write_binary(const char *path) {
-    FILE *f = fopen(path, "wb");
+    FILE *f = rag_os_fopen(path, "wb", NULL);
+    if (!f) {
+        perror(path);
+        exit(2);
+    }
     fwrite("abc\0def", 1, 7, f);
     fclose(f);
 }
@@ -651,18 +655,18 @@ static void test_models_of_two_handles(void) {
 
     /* the same with two sizes of embeddings */
     rag_t *big = open_index("two-sizes.db", (rag_options_t){0});
-    rag_t *small = open_index("two-sizes.db", (rag_options_t){.dimensions = 64});
+    rag_t *narrow = open_index("two-sizes.db", (rag_options_t){.dimensions = 64});
     CHECK(rag_add_file(big, path_of(docs, "fruit.md"), &stats) == RAG_OK);
-    CHECK(rag_add_file(small, path_of(docs, "code.txt"), &stats) == RAG_ERROR_MODEL_MISMATCH);
-    CHECK(strstr(rag_last_error(small)->message, "256") != NULL);
+    CHECK(rag_add_file(narrow, path_of(docs, "code.txt"), &stats) == RAG_ERROR_MODEL_MISMATCH);
+    CHECK(strstr(rag_last_error(narrow)->message, "256") != NULL);
     /* the handle opened before sees what the other stored */
-    CHECK(rag_stats(small, &info) == RAG_OK);
+    CHECK(rag_stats(narrow, &info) == RAG_OK);
     CHECK_SIZE(info.dimensions, 256);
     CHECK(rag_search(big, "bananas", NULL, &r) == RAG_OK);
     CHECK(r && r->count == 1);
     rag_results_free(r);
     rag_close(big);
-    rag_close(small);
+    rag_close(narrow);
 }
 
 static void test_emptied_index(void) {

@@ -230,8 +230,8 @@ static void test_settings(void) {
     rag_close(rag);
 
     /* a stored overlap too large for a smaller chunk size falls back to a quarter of it */
-    rag_options_t small = {.chunk_size = 20};
-    rag = open_ok(path, &small);
+    rag_options_t tiny = {.chunk_size = 20};
+    rag = open_ok(path, &tiny);
     CHECK_SIZE(rag->chunk_overlap, 5);
     rag_close(rag);
 

@@ -203,8 +203,8 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
     def handle_error(self, request, client_address):
-        # the tests close some streams before their end
-        if not isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+        # the tests close some streams before their end (ConnectionAbortedError on Windows)
+        if not isinstance(sys.exc_info()[1], ConnectionError):
             super().handle_error(request, client_address)
 
 
@@ -217,7 +217,12 @@ def main():
     env = dict(os.environ, OLLAMA_HOST=f'127.0.0.1:{server.server_address[1]}')
     env.pop('OLLAMA_API_KEY', None)
     try:
-        return subprocess.run(sys.argv[1:], env=env).returncode
+        code = subprocess.run(sys.argv[1:], env=env).returncode
+        if code < 0 or code > 255:
+            # a signal, or on Windows a status like 0xC0000135 (a DLL is missing)
+            print(f'{sys.argv[1]} failed with exit code {code & 0xFFFFFFFF:#x}', file=sys.stderr)
+            return 1
+        return code
     finally:
         server.shutdown()
 

@@ -53,12 +53,14 @@ def mock(path, body=None):
 
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:  # the same bytes on every system
         f.write(text)
 
 
 def main():
-    with tempfile.TemporaryDirectory() as tmp:
+    # on Windows, an antivirus may still hold a file that was just closed
+    cleanup = {'ignore_cleanup_errors': True} if sys.version_info >= (3, 10) else {}
+    with tempfile.TemporaryDirectory(**cleanup) as tmp:
         tmp = os.path.realpath(tmp)
         notes = os.path.join(tmp, 'notes')
         write(os.path.join(notes, 'fruit.md'),
@@ -158,6 +160,12 @@ def main():
         check(r.returncode == 0 and 'You asked: -q is a word' in r.stdout, '"--" after the command', r)
         r = ragc('search', 'bananas', cwd=tmp)
         check('\n   \n' not in r.stdout, 'no spaces on the empty lines of the results', r)
+        with open(os.path.join(tmp, 'crlf.txt'), 'wb') as f:
+            f.write(b'Windows line ends.\r\n\r\nKiwis are green.\r\n')
+        r = ragc('--db', 'crlf.db', '-e', 'mock-embed', 'index', 'crlf.txt', cwd=tmp)
+        r = ragc('--db', 'crlf.db', 'search', 'kiwis', cwd=tmp)
+        check(r.returncode == 0 and '   Windows line ends.\n\n   Kiwis are green.\n' in r.stdout and '\r' not in r.stdout,
+              'results of a file with CRLF line ends', r)
 
         # a minimum score of 0 drops the negative scores, NaN is refused
         r = ragc('-k', '100', 'search', 'bananas', cwd=tmp)

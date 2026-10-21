@@ -163,10 +163,11 @@ static void print_lines(const rag_result_t *r) {
         printf("%zu-%zu", r->line_start, r->line_end);
 }
 
-/* Prints a text with every line indented. */
+/* Prints a text with every line indented; "\r\n" ends a line too. */
 static void print_indented(const char *text, const char *indent) {
     bool line_start = true;
     for (const char *p = text; *p; p++) {
+        if (*p == '\r' && p[1] == '\n') continue; /* stdout writes the line ends of the system */
         if (line_start && *p != '\n') fputs(indent, stdout); /* no spaces on empty lines */
         putchar(*p);
         line_start = *p == '\n';
