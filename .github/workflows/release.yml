@@ -1,0 +1,66 @@
+name: Release
+
+# A tag v* publishes ragc.exe for Windows x64, with the DLLs it needs, as a
+# zip attached to the GitHub release of the tag (created if needed). Run by
+# hand, the workflow only builds the zip, as an artifact of the run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: ragc.exe for Windows x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libcurl
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg" install curl:x64-windows'
+      - name: Build and test
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DRAG_BUILD_EXAMPLES=OFF -DRAG_INSTALL_RUNTIME_DLLS=ON
+          cmake --build build --config Release -j
+          ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --install build --config Release --prefix "$PWD/install"
+          $version = (./install/bin/ragc.exe --version) -replace '^ragc ', ''
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "the tag $env:GITHUB_REF_NAME does not match the version of ragc ($version)"
+          }
+          $name = "ragc-$version-windows-x64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item install/bin/ragc.exe, install/bin/*.dll, README.md, LICENSE $name
+          Get-ChildItem $name | Format-Table Name, Length
+          # it must run from its own directory, with nothing else on PATH
+          $path = $env:PATH
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          & "$name/ragc.exe" --version
+          $env:PATH = $path
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          "ZIP=$name.zip" >> $env:GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ragc-windows-x64
+          path: ${{ env.ZIP }}
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --generate-notes --verify-tag
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          gh release upload $tag $env:ZIP --repo $env:GITHUB_REPOSITORY --clobber

@@ -70,3 +70,52 @@ jobs:
         run: cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  windows:
+    name: Windows (MSVC, shared=${{ matrix.shared }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shared: [OFF, ON]
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find vcpkg
+        id: vcpkg
+        run: |
+          "TOOLCHAIN=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+          "commit=$(git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+      - name: Cache the vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-curl-x64-windows-${{ steps.vcpkg.outputs.commit }}
+      - name: Install libcurl
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg" install curl:x64-windows'
+      - name: Configure
+        run: >
+          cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:TOOLCHAIN"
+          -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DRAG_WERROR=ON -DRAG_INSTALL_RUNTIME_DLLS=ON
+      - name: Build
+        run: cmake --build build --config Debug -j
+      - name: Test
+        run: ctest --test-dir build -C Debug --output-on-failure
+      - name: Install and use the package
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --install build --config Debug --prefix "$PWD/prefix"
+          cmake -S tests/install -B build-consumer -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:TOOLCHAIN" -DCMAKE_PREFIX_PATH="$PWD/prefix"
+          cmake --build build-consumer --config Debug
+          $env:PATH = "$PWD\prefix\bin;$env:PATH"
+          ./build-consumer/Debug/consumer.exe
+      - name: Run the installed ragc.exe on its own
+        run: |
+          # only the system directories: the DLLs must be next to ragc.exe
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          ./prefix/bin/ragc.exe --version
