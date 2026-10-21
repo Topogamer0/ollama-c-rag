@@ -966,6 +966,15 @@ static void test_renamed_in_case(void) {
     free(dir);
 }
 
+/* A host that Ollama-C rejects, like the Python client, is an invalid argument. */
+static void test_invalid_host(void) {
+    rag_t *rag = open_index("invalid-host.db", (rag_options_t){.host = "http://[::1"});
+    rag_index_stats_t stats;
+    CHECK(rag_add_file(rag, path_of(docs, "fruit.md"), &stats) == RAG_ERROR_INVALID);
+    CHECK(strstr(rag_last_error(rag)->message, "invalid Ollama host 'http://[::1'") != NULL);
+    rag_close(rag);
+}
+
 static void test_empty_index(void) {
     rag_t *rag = open_index("empty.db", (rag_options_t){0});
     rag_results_t *r = NULL;
@@ -1002,6 +1011,7 @@ int main(void) {
     RUN(test_file_removed_while_indexed);
     RUN(test_open_fails_without_changes);
     RUN(test_renamed_in_case);
+    RUN(test_invalid_host);
     RUN(test_empty_index);
 
     remove_tree(tmp);

@@ -49,7 +49,7 @@ Sources:
 
 Requirements: a C99 compiler, CMake 3.14 or later (3.20 for the `ctest --test-dir` and
 `cmake --install` commands below; with older versions run `ctest` and `make install` in `build`), git
-(CMake downloads Ollama-C v0.1.0), and
+(CMake downloads Ollama-C v0.2.0), and
 libcurl with its development headers (`libcurl4-openssl-dev` on Debian/Ubuntu, `libcurl-devel` on
 Fedora; it comes with macOS). The tests also need Python 3.
 

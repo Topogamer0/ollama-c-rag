@@ -75,11 +75,28 @@ rag_status_t rag_report(rag_t *rag, rag_event_t event, const char *path, size_t 
 
 /* ---- Ollama ---- */
 
+/* Why ollama_client_new() failed: it gives no details. */
+static void client_error(rag_t *rag) {
+    const char *host = rag->host && *rag->host ? rag->host : getenv("OLLAMA_HOST");
+    const char *key = getenv("OLLAMA_API_KEY");
+    /* a host that Python rejects too, if a valid one works */
+    ollama_client_t *probe = host && *host ? ollama_client_new("127.0.0.1") : NULL;
+    if (probe) {
+        ollama_client_free(probe);
+        rag_err_set(&rag->err, RAG_ERROR_INVALID, "invalid Ollama host '%s'%s", host,
+                    rag->host && *rag->host ? "" : " (OLLAMA_HOST)");
+    } else if (key && strpbrk(key, "\r\n")) {
+        rag_err_set(&rag->err, RAG_ERROR_INVALID, "OLLAMA_API_KEY contains a line break");
+    } else {
+        rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+    }
+}
+
 ollama_client_t *rag_client(rag_t *rag) {
     if (!rag->client) {
         rag->client = ollama_client_new(rag->host);
         if (!rag->client) {
-            rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+            client_error(rag);
             return NULL;
         }
         if (rag->timeout_ms > 0) ollama_client_set_timeout(rag->client, rag->timeout_ms);

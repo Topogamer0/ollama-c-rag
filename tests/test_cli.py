@@ -150,6 +150,10 @@ def main():
         check(r.returncode == 1 and 'something went wrong' in r.stderr, 'error while streaming', r)
         r = ragc('-H', 'http://127.0.0.1:1', 'ask', 'bananas', cwd=tmp)
         check(r.returncode == 1 and 'Failed to connect' in r.stderr, 'Ollama not running', r)
+        r = ragc('-H', 'http://[::1', 'search', 'bananas', cwd=tmp)
+        check(r.returncode == 1 and "invalid Ollama host 'http://[::1'" in r.stderr, 'invalid host', r)
+        r = ragc('search', 'bananas', cwd=tmp, env={'OLLAMA_HOST': '[::1]:x'})
+        check(r.returncode == 1 and "invalid Ollama host '[::1]:x' (OLLAMA_HOST)" in r.stderr, 'invalid OLLAMA_HOST', r)
 
         # the question is the rest of the line, words starting with "-" included
         r = ragc('search', 'bananas', '-40', 'degrees', cwd=tmp)

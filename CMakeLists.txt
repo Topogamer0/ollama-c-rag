@@ -52,7 +52,7 @@ endif()
 # ---- dependencies ----
 
 if(RAG_USE_SYSTEM_OLLAMA_C)
-    find_package(ollama-c 0.1 REQUIRED)
+    find_package(ollama-c 0.2 REQUIRED)
 else()
     # installed along with ollama-rag-c, which needs it
     set(OLLAMA_INSTALL ${RAG_INSTALL})
@@ -61,7 +61,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(ollama_c
         GIT_REPOSITORY https://github.com/Topogamer0/Ollama-C.git
-        GIT_TAG v0.1.0
+        GIT_TAG v0.2.0
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(ollama_c)
 endif()
@@ -249,7 +249,7 @@ if(RAG_INSTALL)
     endif()
     file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c-config.cmake
         "include(CMakeFindDependencyMacro)\n"
-        "find_dependency(ollama-c 0.1)\n"
+        "find_dependency(ollama-c 0.2)\n"
         "${RAG_FIND_SQLITE}"
         "include(\"\${CMAKE_CURRENT_LIST_DIR}/ollama-rag-c-targets.cmake\")\n")
     write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c-config-version.cmake
