@@ -57,8 +57,7 @@ else()
         POSITION_INDEPENDENT_CODE ON)
 endif()
 
-include(CheckLibraryExists)
-check_library_exists(m sqrt "" RAG_HAVE_LIBM)
+find_library(RAG_MATH_LIBRARY m)
 
 # Adds SQLite and the system libraries to a target built from RAG_SOURCES.
 function(rag_link_dependencies target)
@@ -70,8 +69,8 @@ function(rag_link_dependencies target)
         target_include_directories(${target} SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite)
         target_link_libraries(${target} PRIVATE Threads::Threads)
     endif()
-    if(RAG_HAVE_LIBM)
-        target_link_libraries(${target} PRIVATE m)
+    if(RAG_MATH_LIBRARY)
+        target_link_libraries(${target} PRIVATE ${RAG_MATH_LIBRARY})
     endif()
 endfunction()
 
@@ -80,8 +79,11 @@ endfunction()
 set(RAG_SOURCES
     src/chunk.c
     src/db.c
+    src/embed.c
     src/fs.c
+    src/index.c
     src/rag.c
+    src/search.c
     src/sha256.c
     src/utf8.c
     src/util.c

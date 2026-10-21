@@ -167,10 +167,10 @@ static size_t find_break(const doc_t *d, size_t from, size_t lo, size_t limit) {
  */
 static size_t overlap_start(const doc_t *d, size_t from, size_t e, size_t overlap) {
     const char *t = d->t;
-    size_t n = utf8_count(t, from, e);
+    size_t n = rag_utf8_count(t, from, e);
     if (n <= overlap) return e;
-    size_t o = utf8_advance(t, d->len, from, n - overlap);
-    size_t half = utf8_advance(t, d->len, o, overlap / 2);
+    size_t o = rag_utf8_advance(t, d->len, from, n - overlap);
+    size_t half = rag_utf8_advance(t, d->len, o, overlap / 2);
 
     size_t best[BREAK_LEVELS];
     bool found[BREAK_LEVELS] = {false};
@@ -229,7 +229,7 @@ static size_t line_of(const char *t, line_cursor_t *c, size_t pos) {
     return c->line;
 }
 
-bool chunk_split(const char *text, size_t len, size_t size, size_t overlap, chunk_list_t *out) {
+bool rag_chunk_split(const char *text, size_t len, size_t size, size_t overlap, chunk_list_t *out) {
     if (size == 0) size = 1;
     if (overlap >= size) overlap = size - 1;
 
@@ -250,10 +250,10 @@ bool chunk_split(const char *text, size_t len, size_t size, size_t overlap, chun
         pos = skip_space(text, len, pos);
         if (pos >= len) break;
 
-        size_t limit = utf8_advance(text, len, pos, size);
+        size_t limit = rag_utf8_advance(text, len, pos, size);
         size_t end = len;
         if (limit < len) {
-            size_t lo = utf8_advance(text, len, pos, size / 2 ? size / 2 : 1);
+            size_t lo = rag_utf8_advance(text, len, pos, size / 2 ? size / 2 : 1);
             if (lo < min_end) lo = min_end;
             end = lo <= limit ? find_break(&d, pos, lo, limit) : limit;
         }
@@ -268,17 +268,17 @@ bool chunk_split(const char *text, size_t len, size_t size, size_t overlap, chun
 
         size_t rest = skip_space(text, len, end);
         if (rest >= len) break;
-        min_end = rest + utf8_char_len(text, len, rest);
+        min_end = rest + rag_utf8_char_len(text, len, rest);
 
         /* the next chunk must be able to reach past this one */
         size_t next = overlap ? overlap_start(&d, pos, e, overlap) : e;
-        pos = next < e && utf8_count(text, next, min_end) <= size ? next : rest;
+        pos = next < e && rag_utf8_count(text, next, min_end) <= size ? next : rest;
     }
     free(d.fences);
     return ok;
 }
 
-void chunk_list_free(chunk_list_t *list) {
+void rag_chunk_list_free(chunk_list_t *list) {
     free(list->items);
     *list = (chunk_list_t){0};
 }

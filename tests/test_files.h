@@ -13,6 +13,27 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static inline char *dup_string(const char *s) {
+    char *copy = malloc(strlen(s) + 1);
+    if (!copy) exit(2);
+    return strcpy(copy, s);
+}
+
+/* A growable string. */
+typedef struct string {
+    char *data;
+    size_t len;
+} string_t;
+
+static inline void string_append(string_t *s, const char *text) {
+    size_t n = strlen(text);
+    char *data = realloc(s->data, s->len + n + 1);
+    if (!data) exit(2);
+    memcpy(data + s->len, text, n + 1);
+    s->data = data;
+    s->len += n;
+}
+
 /* Creates a new directory in the current one and returns its absolute, resolved path. */
 static inline char *make_temp_dir(void) {
     char name[] = "ragtest-XXXXXX";

@@ -50,7 +50,7 @@ static void transform(sha256_t *s, const unsigned char block[64]) {
     s->state[7] += h;
 }
 
-void sha256_init(sha256_t *s) {
+void rag_sha256_init(sha256_t *s) {
     static const uint32_t init[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     memcpy(s->state, init, sizeof(init));
@@ -58,7 +58,7 @@ void sha256_init(sha256_t *s) {
     s->used = 0;
 }
 
-void sha256_update(sha256_t *s, const void *data, size_t len) {
+void rag_sha256_update(sha256_t *s, const void *data, size_t len) {
     const unsigned char *p = data;
     s->bits += (uint64_t)len * 8;
     while (len > 0) {
@@ -74,12 +74,12 @@ void sha256_update(sha256_t *s, const void *data, size_t len) {
     }
 }
 
-void sha256_final(sha256_t *s, unsigned char digest[32]) {
+void rag_sha256_final(sha256_t *s, unsigned char digest[32]) {
     uint64_t bits = s->bits;
     unsigned char pad[72] = {0x80};
     size_t padlen = s->used < 56 ? 56 - s->used : 120 - s->used;
     for (int i = 0; i < 8; i++) pad[padlen + i] = (unsigned char)(bits >> (56 - 8 * i));
-    sha256_update(s, pad, padlen + 8);
+    rag_sha256_update(s, pad, padlen + 8);
     for (int i = 0; i < 8; i++) {
         digest[4 * i] = (unsigned char)(s->state[i] >> 24);
         digest[4 * i + 1] = (unsigned char)(s->state[i] >> 16);
@@ -88,13 +88,13 @@ void sha256_final(sha256_t *s, unsigned char digest[32]) {
     }
 }
 
-void sha256_hex(const void *data, size_t len, char hex[65]) {
+void rag_sha256_hex(const void *data, size_t len, char hex[65]) {
     static const char digits[] = "0123456789abcdef";
     sha256_t s;
     unsigned char digest[32];
-    sha256_init(&s);
-    sha256_update(&s, data, len);
-    sha256_final(&s, digest);
+    rag_sha256_init(&s);
+    rag_sha256_update(&s, data, len);
+    rag_sha256_final(&s, digest);
     for (int i = 0; i < 32; i++) {
         hex[2 * i] = digits[digest[i] >> 4];
         hex[2 * i + 1] = digits[digest[i] & 15];

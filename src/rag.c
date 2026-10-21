@@ -1,6 +1,8 @@
 /* The handle: opening, settings, statistics, removal of files. */
 #include "internal.h"
 
+#include <ollama.h>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,7 +45,7 @@ static bool ascii_ieq_n(const char *a, const char *b, size_t n) {
     return true;
 }
 
-bool same_model(const char *a, const char *b) {
+bool rag_same_model(const char *a, const char *b) {
     size_t na = model_name_len(a), nb = model_name_len(b);
     const char *ta = model_tag(a), *tb = model_tag(b);
     return na == nb && ascii_ieq_n(a, b, na) && strlen(ta) == strlen(tb) && ascii_ieq_n(ta, tb, strlen(ta));
@@ -68,33 +70,66 @@ rag_status_t rag_report(rag_t *rag, rag_event_t event, const char *path, size_t 
     if (!rag->progress) return RAG_OK;
     rag_progress_t p = {event, path, chunks, message, done, total};
     if (rag->progress(&p, rag->progress_data) == 0) return RAG_OK;
-    return err_set(&rag->err, RAG_ERROR_ABORTED, "stopped by the progress callback");
+    return rag_err_set(&rag->err, RAG_ERROR_ABORTED, "stopped by the progress callback");
+}
+
+/* ---- Ollama ---- */
+
+ollama_client_t *rag_client(rag_t *rag) {
+    if (!rag->client) {
+        rag->client = ollama_client_new(rag->host);
+        if (!rag->client) {
+            rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+            return NULL;
+        }
+        if (rag->timeout_ms > 0) ollama_client_set_timeout(rag->client, rag->timeout_ms);
+    }
+    return rag->client;
+}
+
+rag_status_t rag_ollama_error(rag_t *rag, int status, const char *what, const char *model) {
+    const ollama_error_t *e = ollama_last_error(rag->client);
+    rag_status_t st;
+    switch ((ollama_status_t)status) {
+    case OLLAMA_ERROR_MEMORY: return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+    case OLLAMA_ERROR_CONNECTION:
+        st = rag_err_set(&rag->err, RAG_ERROR_OLLAMA, "%s (%s)", e->message, ollama_client_host(rag->client));
+        break;
+    case OLLAMA_ERROR_RESPONSE:
+        st = rag_err_set(&rag->err, RAG_ERROR_OLLAMA, "%s '%s': %s%s%s", what, model, e->message,
+                         e->status_code == 404 ? "; to download it: ollama pull " : "",
+                         e->status_code == 404 ? model : "");
+        break;
+    default: st = rag_err_set(&rag->err, RAG_ERROR_OLLAMA, "%s '%s': %s", what, model, e->message); break;
+    }
+    rag->err.pub.status_code = e->status_code;
+    return st;
 }
 
 /* ---- opening ---- */
 
-static rag_status_t oom(rag_t *rag) { return err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory"); }
+static rag_status_t oom(rag_t *rag) { return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory"); }
 
 /* Stored string setting, or NULL. */
-static rag_status_t stored(rag_t *rag, const char *key, char **value) { return db_get_meta(rag, key, value); }
+static rag_status_t stored(rag_t *rag, const char *key, char **value) { return rag_db_get_meta(rag, key, value); }
 
 static rag_status_t has_vectors(rag_t *rag, bool *result) {
     db_counts_t c;
-    rag_status_t st = db_counts(rag, &c);
+    rag_status_t st = rag_db_counts(rag, &c);
     *result = st == RAG_OK && c.vectors > 0;
     return st;
 }
 
 static rag_status_t load_model(rag_t *rag, const rag_options_t *o) {
     if (o->dimensions < 0)
-        return err_set(&rag->err, RAG_ERROR_INVALID, "invalid number of dimensions: %d", o->dimensions);
+        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "invalid number of dimensions: %d", o->dimensions);
     char *model = NULL;
     rag_status_t st = stored(rag, "embed_model", &model);
     if (st != RAG_OK) return st;
     int64_t dims = 0, requested = 0;
     bool dims_found = false, requested_found = false;
-    st = db_get_meta_int(rag, "dimensions", &dims, &dims_found);
-    if (st == RAG_OK) st = db_get_meta_int(rag, "embed_dimensions", &requested, &requested_found);
+    st = rag_db_get_meta_int(rag, "dimensions", &dims, &dims_found);
+    if (st == RAG_OK) st = rag_db_get_meta_int(rag, "embed_dimensions", &requested, &requested_found);
     bool vectors = false;
     if (st == RAG_OK) st = has_vectors(rag, &vectors);
     if (st != RAG_OK) {
@@ -104,12 +139,12 @@ static rag_status_t load_model(rag_t *rag, const rag_options_t *o) {
 
     bool changed = false;
     if (o->embed_model && *o->embed_model) {
-        if (model && !same_model(model, o->embed_model)) {
+        if (model && !rag_same_model(model, o->embed_model)) {
             if (vectors) {
-                st = err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
-                             "the index '%s' was built with the embedding model '%s', not '%s': use the same "
-                             "model, or another database for the other model",
-                             rag->path, model, o->embed_model);
+                st = rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
+                                 "the index '%s' was built with the embedding model '%s', not '%s': use the same "
+                                 "model, or another database for the other model",
+                                 rag->path, model, o->embed_model);
                 free(model);
                 return st;
             }
@@ -129,20 +164,20 @@ static rag_status_t load_model(rag_t *rag, const rag_options_t *o) {
     if (changed) {
         /* settings tied to the previous model */
         dims_found = requested_found = false;
-        st = db_set_meta(rag, "embed_model", model);
-        if (st == RAG_OK) st = db_set_meta(rag, "dimensions", "0");
-        if (st == RAG_OK) st = db_set_meta(rag, "embed_dimensions", "0");
-        if (st == RAG_OK) st = db_delete_meta(rag, "query_prefix");
-        if (st == RAG_OK) st = db_delete_meta(rag, "document_prefix");
+        st = rag_db_set_meta(rag, "embed_model", model);
+        if (st == RAG_OK) st = rag_db_set_meta(rag, "dimensions", "0");
+        if (st == RAG_OK) st = rag_db_set_meta(rag, "embed_dimensions", "0");
+        if (st == RAG_OK) st = rag_db_delete_meta(rag, "query_prefix");
+        if (st == RAG_OK) st = rag_db_delete_meta(rag, "document_prefix");
         if (st != RAG_OK) return st;
     }
     rag->stored_dimensions = dims_found && dims > 0 ? (size_t)dims : 0;
     rag->dimensions = o->dimensions ? o->dimensions : requested_found && requested > 0 ? (int)requested : 0;
     if (o->dimensions > 0 && vectors && rag->stored_dimensions && (size_t)o->dimensions != rag->stored_dimensions)
-        return err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
-                       "the index '%s' stores embeddings of %zu dimensions, not %d: use the same size, or another "
-                       "database",
-                       rag->path, rag->stored_dimensions, o->dimensions);
+        return rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
+                           "the index '%s' stores embeddings of %zu dimensions, not %d: use the same size, or another "
+                           "database",
+                           rag->path, rag->stored_dimensions, o->dimensions);
     return RAG_OK;
 }
 
@@ -172,17 +207,17 @@ static rag_status_t load_settings(rag_t *rag, const rag_options_t *o) {
 
     int64_t size = 0, overlap = 0;
     bool size_found = false, overlap_found = false;
-    st = db_get_meta_int(rag, "chunk_size", &size, &size_found);
-    if (st == RAG_OK) st = db_get_meta_int(rag, "chunk_overlap", &overlap, &overlap_found);
+    st = rag_db_get_meta_int(rag, "chunk_size", &size, &size_found);
+    if (st == RAG_OK) st = rag_db_get_meta_int(rag, "chunk_overlap", &overlap, &overlap_found);
     if (st != RAG_OK) return st;
     rag->chunk_size = o->chunk_size ? o->chunk_size : size_found && size > 0 ? (size_t)size : RAG_DEFAULT_CHUNK_SIZE;
     if (o->chunk_overlap == RAG_NO_OVERLAP) {
         rag->chunk_overlap = 0;
     } else if (o->chunk_overlap) {
         if (o->chunk_overlap >= rag->chunk_size)
-            return err_set(&rag->err, RAG_ERROR_INVALID,
-                           "the chunk overlap (%zu) must be smaller than the chunk size (%zu)", o->chunk_overlap,
-                           rag->chunk_size);
+            return rag_err_set(&rag->err, RAG_ERROR_INVALID,
+                               "the chunk overlap (%zu) must be smaller than the chunk size (%zu)", o->chunk_overlap,
+                               rag->chunk_size);
         rag->chunk_overlap = o->chunk_overlap;
     } else if (overlap_found && overlap >= 0 && (size_t)overlap < rag->chunk_size) {
         rag->chunk_overlap = (size_t)overlap;
@@ -207,27 +242,28 @@ rag_status_t rag_open(const char *path, const rag_options_t *options, rag_t **ou
     if (!out) return RAG_ERROR_INVALID;
     rag_t *rag = *out = calloc(1, sizeof(*rag));
     if (!rag) return RAG_ERROR_MEMORY;
-    err_init(&rag->err);
-    if (!path || !*path) return err_set(&rag->err, RAG_ERROR_INVALID, "no database path");
+    rag_err_init(&rag->err);
+    if (!path || !*path) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no database path");
     rag->path = rag_strdup(path);
     if (!rag->path) return oom(rag);
 
-    rag_status_t st = db_open(rag, path, (options ? options : &defaults)->must_exist);
+    rag_status_t st = rag_db_open(rag, path, (options ? options : &defaults)->must_exist);
     if (st == RAG_OK) st = load_settings(rag, options ? options : &defaults);
-    if (st != RAG_OK) db_close(rag);
+    if (st != RAG_OK) rag_db_close(rag);
     return st;
 }
 
 void rag_close(rag_t *rag) {
     if (!rag) return;
-    if (rag->db) db_close(rag);
+    if (rag->db) rag_db_close(rag);
+    ollama_client_free(rag->client);
     free(rag->path);
     free(rag->host);
     free(rag->embed_model);
     free(rag->query_prefix);
     free(rag->document_prefix);
     free(rag->chat_model);
-    err_free(&rag->err);
+    rag_err_free(&rag->err);
     free(rag);
 }
 
@@ -239,8 +275,8 @@ const rag_error_t *rag_last_error(const rag_t *rag) {
 /* Starts a public call: checks the handle and clears the last error. */
 rag_status_t rag_begin_call(rag_t *rag) {
     if (!rag) return RAG_ERROR_INVALID;
-    err_clear(&rag->err);
-    if (!rag->db) return err_set(&rag->err, RAG_ERROR_INVALID, "the database is not open");
+    rag_err_clear(&rag->err);
+    if (!rag->db) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "the database is not open");
     return RAG_OK;
 }
 
@@ -249,9 +285,9 @@ rag_status_t rag_begin_call(rag_t *rag) {
 rag_status_t rag_stats(rag_t *rag, rag_stats_t *stats) {
     rag_status_t st = rag_begin_call(rag);
     if (st != RAG_OK) return st;
-    if (!stats) return err_set(&rag->err, RAG_ERROR_INVALID, "no stats");
+    if (!stats) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no stats");
     db_counts_t c;
-    st = db_counts(rag, &c);
+    st = rag_db_counts(rag, &c);
     if (st != RAG_OK) return st;
     *stats = (rag_stats_t){
         .path = rag->path,
@@ -276,23 +312,23 @@ rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *st
     memset(stats, 0, sizeof(*stats));
     rag_status_t st = rag_begin_call(rag);
     if (st != RAG_OK) return st;
-    if (!path || !*path) return err_set(&rag->err, RAG_ERROR_INVALID, "no path");
+    if (!path || !*path) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no path");
 
-    char *canonical = fs_canonical(path);
+    char *canonical = rag_fs_canonical(path);
     if (!canonical) return oom(rag);
     db_file_list_t files = {0};
-    st = db_files_under(rag, canonical, &files);
+    st = rag_db_files_under(rag, canonical, &files);
     free(canonical);
     if (st == RAG_OK && files.count == 0)
-        st = err_set(&rag->err, RAG_ERROR_NOT_FOUND, "'%s' is not in the index", path);
-    if (st == RAG_OK) st = db_begin(rag);
+        st = rag_err_set(&rag->err, RAG_ERROR_NOT_FOUND, "'%s' is not in the index", path);
+    if (st == RAG_OK) st = rag_db_begin(rag);
     if (st != RAG_OK) {
-        db_file_list_free(&files);
+        rag_db_file_list_free(&files);
         return st;
     }
     for (size_t i = 0; st == RAG_OK && i < files.count; i++) {
         size_t chunks = 0;
-        st = db_delete_file(rag, files.items[i].id, &chunks);
+        st = rag_db_delete_file(rag, files.items[i].id, &chunks);
         if (st == RAG_OK) {
             stats->files_removed++;
             stats->chunks_removed += chunks;
@@ -300,10 +336,10 @@ rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *st
         }
     }
     if (st == RAG_OK)
-        st = db_commit(rag);
+        st = rag_db_commit(rag);
     else
-        db_rollback(rag);
+        rag_db_rollback(rag);
     if (st != RAG_OK) memset(stats, 0, sizeof(*stats));
-    db_file_list_free(&files);
+    rag_db_file_list_free(&files);
     return st;
 }

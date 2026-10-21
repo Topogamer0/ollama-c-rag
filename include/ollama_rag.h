@@ -165,11 +165,71 @@ typedef struct rag_index_stats {
 } rag_index_stats_t;
 
 /*
+ * Indexes a text file, whatever its extension: splits it into chunks, computes
+ * their embeddings and stores them, replacing the previous version of the
+ * file. Does nothing if the file has not changed since it was indexed with the
+ * same settings. `stats` can be NULL.
+ */
+RAG_API rag_status_t rag_add_file(rag_t *rag, const char *path, rag_index_stats_t *stats);
+
+/*
+ * Indexes the text files (.txt, .md, .markdown, ...) below a directory,
+ * recursively, skipping hidden files and directories. Only new and modified
+ * files are processed, and the files of the directory that have been deleted
+ * are removed from the index. Files that cannot be read are reported to the
+ * progress callback (RAG_FILE_FAILED) and skipped. `stats` can be NULL.
+ *
+ * Embeddings are computed in batches that can span several files. Every file
+ * is stored as soon as all its chunks have been embedded: if the call fails or
+ * is stopped, the files already stored stay indexed, and a file that was being
+ * indexed is indexed again by the next call.
+ */
+RAG_API rag_status_t rag_add_dir(rag_t *rag, const char *path, rag_index_stats_t *stats);
+
+/*
  * Removes a file from the index, or all the indexed files below a directory.
  * The file does not need to exist anymore. Fails with RAG_ERROR_NOT_FOUND if
  * nothing is indexed under `path`. `stats` can be NULL.
  */
 RAG_API rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *stats);
+
+/* ===========================================================================
+ * Searching
+ *
+ * The question is embedded with the model of the index and compared with
+ * every chunk (cosine similarity, exact search).
+ * ======================================================================== */
+
+typedef struct rag_search_options {
+    size_t top_k;     /* number of chunks to return; 0: RAG_DEFAULT_TOP_K */
+    double min_score; /* chunks with a lower score are dropped; 0: none are */
+} rag_search_options_t;
+
+/* A chunk found by a search. */
+typedef struct rag_result {
+    const char *path;  /* the file it comes from */
+    size_t chunk;      /* position of the chunk in the file, from 0 */
+    size_t start, end; /* byte offsets of the chunk in the file */
+    size_t line_start; /* first line of the chunk, from 1 */
+    size_t line_end;   /* last line of the chunk */
+    const char *text;  /* the text of the chunk */
+    double score;      /* cosine similarity with the question, from -1 to 1 */
+} rag_result_t;
+
+typedef struct rag_results {
+    const rag_result_t *items; /* the most similar first */
+    size_t count;
+} rag_results_t;
+
+/*
+ * Finds the chunks most similar to `query`. `options` can be NULL. An empty
+ * index gives no results. Release *results with rag_results_free().
+ */
+RAG_API rag_status_t rag_search(rag_t *rag, const char *query, const rag_search_options_t *options,
+                                rag_results_t **results);
+
+/* Releases search results. NULL is ignored. */
+RAG_API void rag_results_free(rag_results_t *results);
 
 /* ===========================================================================
  * Information

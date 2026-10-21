@@ -18,7 +18,7 @@ static void test_sha256(void) {
     };
     char hex[65];
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        sha256_hex(cases[i].input, strlen(cases[i].input), hex);
+        rag_sha256_hex(cases[i].input, strlen(cases[i].input), hex);
         CHECK_STR(hex, cases[i].digest);
     }
 
@@ -27,13 +27,13 @@ static void test_sha256(void) {
     memset(a, 'a', sizeof(a));
     sha256_t s;
     unsigned char digest[32];
-    sha256_init(&s);
+    rag_sha256_init(&s);
     for (size_t done = 0, step = 1; done < 1000000; step = step % 997 + 1) {
         size_t n = 1000000 - done < step ? 1000000 - done : step;
-        sha256_update(&s, a, n);
+        rag_sha256_update(&s, a, n);
         done += n;
     }
-    sha256_final(&s, digest);
+    rag_sha256_final(&s, digest);
     static const char *digits = "0123456789abcdef";
     for (int i = 0; i < 32; i++) {
         hex[2 * i] = digits[digest[i] >> 4];
@@ -44,18 +44,18 @@ static void test_sha256(void) {
 }
 
 static void test_text_extensions(void) {
-    CHECK(fs_is_text_file("a.md"));
-    CHECK(fs_is_text_file("NOTES.MD"));
-    CHECK(fs_is_text_file("x.txt"));
-    CHECK(fs_is_text_file("readme.markdown"));
-    CHECK(!fs_is_text_file(".md"));
-    CHECK(!fs_is_text_file("a.mdx"));
-    CHECK(!fs_is_text_file("a.c"));
-    CHECK(!fs_is_text_file("txt"));
+    CHECK(rag_fs_is_text_file("a.md"));
+    CHECK(rag_fs_is_text_file("NOTES.MD"));
+    CHECK(rag_fs_is_text_file("x.txt"));
+    CHECK(rag_fs_is_text_file("readme.markdown"));
+    CHECK(!rag_fs_is_text_file(".md"));
+    CHECK(!rag_fs_is_text_file("a.mdx"));
+    CHECK(!rag_fs_is_text_file("a.c"));
+    CHECK(!rag_fs_is_text_file("txt"));
 }
 
 static void check_canonical(const char *input, const char *expected) {
-    char *got = fs_canonical(input);
+    char *got = rag_fs_canonical(input);
     CHECK_STR(got, expected);
     free(got);
 }
@@ -89,7 +89,7 @@ static void test_canonical(void) {
     check_canonical(path_of(tmp, "a.md"), path_of(tmp, "a.md"));
     check_canonical("/", "/");
     check_canonical("//", "/");
-    CHECK(fs_canonical("") == NULL);
+    CHECK(rag_fs_canonical("") == NULL);
 }
 
 static void test_list_dir(void) {
@@ -102,22 +102,22 @@ static void test_list_dir(void) {
 
     fs_list_t list = {0};
     err_t e;
-    err_init(&e);
-    CHECK(fs_list_dir(root, &list, &e) == RAG_OK);
+    rag_err_init(&e);
+    CHECK(rag_fs_list_dir(root, &list, &e) == RAG_OK);
     const char *expected[] = {"a.md", "b.txt", "filelink.md", "sub/d.markdown", "sub/deeper/e.MD"};
     CHECK_SIZE(list.count, 5);
     for (size_t i = 0; i < list.count && i < 5; i++) {
         CHECK_STR(list.items[i].path, path_of(root, expected[i]));
         CHECK(list.items[i].error == NULL);
     }
-    fs_list_free(&list);
+    rag_fs_list_free(&list);
 
     /* unreadable directories are reported (root can read everything) */
     if (geteuid() != 0) {
         char *locked = rag_strdup(path_of(root, "locked"));
         write_file(path_of(locked, "f.md"), "x");
         chmod(locked, 0);
-        CHECK(fs_list_dir(root, &list, &e) == RAG_OK);
+        CHECK(rag_fs_list_dir(root, &list, &e) == RAG_OK);
         size_t errors = 0;
         for (size_t i = 0; i < list.count; i++) {
             if (list.items[i].error) {
@@ -126,16 +126,16 @@ static void test_list_dir(void) {
             }
         }
         CHECK_SIZE(errors, 1);
-        fs_list_free(&list);
+        rag_fs_list_free(&list);
         chmod(locked, 0755);
         free(locked);
     }
 
-    CHECK(fs_list_dir(path_of(root, "a.md"), &list, &e) == RAG_ERROR_INVALID);
-    CHECK(fs_list_dir(path_of(root, "missing"), &list, &e) == RAG_ERROR_NOT_FOUND);
+    CHECK(rag_fs_list_dir(path_of(root, "a.md"), &list, &e) == RAG_ERROR_INVALID);
+    CHECK(rag_fs_list_dir(path_of(root, "missing"), &list, &e) == RAG_ERROR_NOT_FOUND);
     CHECK(strstr(e.pub.message, "missing") != NULL);
     CHECK_SIZE(list.count, 0);
-    err_free(&e);
+    rag_err_free(&e);
     free(root);
 }
 
@@ -144,23 +144,23 @@ static void test_read_file(void) {
     write_file(path, "hello\nworld\n");
     buf_t b = {0};
     err_t e;
-    err_init(&e);
-    CHECK(fs_read_file(path, &b, &e) == RAG_OK);
-    CHECK_STR(buf_cstr(&b), "hello\nworld\n");
-    buf_free(&b);
+    rag_err_init(&e);
+    CHECK(rag_fs_read_file(path, &b, &e) == RAG_OK);
+    CHECK_STR(rag_buf_cstr(&b), "hello\nworld\n");
+    rag_buf_free(&b);
 
     fs_info_t info;
-    CHECK(fs_stat(path, &info, &e) == RAG_OK);
+    CHECK(rag_fs_stat(path, &info, &e) == RAG_OK);
     CHECK(info.is_file && !info.is_dir);
     CHECK(info.size == 12);
-    CHECK(fs_stat(tmp, &info, &e) == RAG_OK);
+    CHECK(rag_fs_stat(tmp, &info, &e) == RAG_OK);
     CHECK(info.is_dir && !info.is_file);
-    CHECK(fs_stat(path_of(tmp, "nothing"), &info, &e) == RAG_ERROR_NOT_FOUND);
+    CHECK(rag_fs_stat(path_of(tmp, "nothing"), &info, &e) == RAG_ERROR_NOT_FOUND);
 
-    CHECK(fs_read_file(path_of(tmp, "nothing"), &b, &e) == RAG_ERROR_IO);
+    CHECK(rag_fs_read_file(path_of(tmp, "nothing"), &b, &e) == RAG_ERROR_IO);
     CHECK(strstr(e.pub.message, "nothing") != NULL);
-    buf_free(&b);
-    err_free(&e);
+    rag_buf_free(&b);
+    rag_err_free(&e);
 }
 
 int main(void) {

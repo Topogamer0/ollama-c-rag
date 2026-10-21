@@ -46,8 +46,8 @@ enum { STMT_ADD_CHUNK, STMT_ADD_VECTOR };
 
 static rag_status_t db_error(rag_t *rag) {
     int code = sqlite3_errcode(rag->db);
-    if (code == SQLITE_NOMEM) return err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
-    return err_set(&rag->err, RAG_ERROR_DATABASE, "database '%s': %s", rag->path, sqlite3_errmsg(rag->db));
+    if (code == SQLITE_NOMEM) return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+    return rag_err_set(&rag->err, RAG_ERROR_DATABASE, "database '%s': %s", rag->path, sqlite3_errmsg(rag->db));
 }
 
 static rag_status_t exec(rag_t *rag, const char *sql) {
@@ -90,7 +90,7 @@ static rag_status_t query_int(rag_t *rag, const char *sql, int64_t *value) {
     if (rc == SQLITE_ROW)
         *value = sqlite3_column_int64(stmt, 0);
     else
-        st = rc == SQLITE_DONE ? err_set(&rag->err, RAG_ERROR_DATABASE, "no result for %s", sql) : db_error(rag);
+        st = rc == SQLITE_DONE ? rag_err_set(&rag->err, RAG_ERROR_DATABASE, "no result for %s", sql) : db_error(rag);
     sqlite3_finalize(stmt);
     return st;
 }
@@ -110,11 +110,11 @@ static rag_status_t create_schema(rag_t *rag) {
     if (st == RAG_OK && tables == 0) {
         /* nobody created it in the meantime */
         st = exec(rag, SCHEMA);
-        if (st == RAG_OK) st = db_set_meta_int(rag, "schema_version", SCHEMA_VERSION);
-        if (st == RAG_OK) st = db_set_meta_int(rag, "created_at", (int64_t)time(NULL));
+        if (st == RAG_OK) st = rag_db_set_meta_int(rag, "schema_version", SCHEMA_VERSION);
+        if (st == RAG_OK) st = rag_db_set_meta_int(rag, "created_at", (int64_t)time(NULL));
     }
     if (st == RAG_OK) return exec(rag, "COMMIT");
-    db_rollback(rag);
+    rag_db_rollback(rag);
     return st;
 }
 
@@ -129,41 +129,41 @@ static rag_status_t check_schema(rag_t *rag) {
     if (st != RAG_OK) return st;
     int64_t version = 0;
     bool found = false;
-    if (has_meta) st = db_get_meta_int(rag, "schema_version", &version, &found);
+    if (has_meta) st = rag_db_get_meta_int(rag, "schema_version", &version, &found);
     if (st != RAG_OK) return st;
-    if (!found) return err_set(&rag->err, RAG_ERROR_DATABASE, "'%s' is not an ollama-rag database", rag->path);
+    if (!found) return rag_err_set(&rag->err, RAG_ERROR_DATABASE, "'%s' is not an ollama-rag database", rag->path);
     if (version > SCHEMA_VERSION)
-        return err_set(&rag->err, RAG_ERROR_DATABASE,
-                       "'%s' was created by a newer version of ollama-rag-c (schema %lld, this version reads %d)",
-                       rag->path, (long long)version, SCHEMA_VERSION);
+        return rag_err_set(&rag->err, RAG_ERROR_DATABASE,
+                           "'%s' was created by a newer version of ollama-rag-c (schema %lld, this version reads %d)",
+                           rag->path, (long long)version, SCHEMA_VERSION);
     return RAG_OK;
 }
 
-rag_status_t db_open(rag_t *rag, const char *path, bool must_exist) {
+rag_status_t rag_db_open(rag_t *rag, const char *path, bool must_exist) {
     if (must_exist && strcmp(path, ":memory:") != 0) {
         fs_info_t info;
         err_t e;
-        err_init(&e);
-        rag_status_t st = fs_stat(path, &info, &e);
-        err_free(&e);
+        rag_err_init(&e);
+        rag_status_t st = rag_fs_stat(path, &info, &e);
+        rag_err_free(&e);
         if (st == RAG_ERROR_NOT_FOUND)
-            return err_set(&rag->err, RAG_ERROR_NOT_FOUND, "the database '%s' does not exist", path);
+            return rag_err_set(&rag->err, RAG_ERROR_NOT_FOUND, "the database '%s' does not exist", path);
     }
     int flags = SQLITE_OPEN_READWRITE | (must_exist ? 0 : SQLITE_OPEN_CREATE);
     int rc = sqlite3_open_v2(path, &rag->db, flags, NULL);
     if (rc != SQLITE_OK) {
-        rag_status_t st = rag->db ? db_error(rag) : err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
-        db_close(rag);
+        rag_status_t st = rag->db ? db_error(rag) : rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+        rag_db_close(rag);
         return st;
     }
     sqlite3_busy_timeout(rag->db, 5000);
     rag_status_t st = exec(rag, "PRAGMA foreign_keys = ON");
     if (st == RAG_OK) st = check_schema(rag);
-    if (st != RAG_OK) db_close(rag);
+    if (st != RAG_OK) rag_db_close(rag);
     return st;
 }
 
-void db_close(rag_t *rag) {
+void rag_db_close(rag_t *rag) {
     for (size_t i = 0; i < sizeof(rag->stmts) / sizeof(rag->stmts[0]); i++) {
         sqlite3_finalize(rag->stmts[i]);
         rag->stmts[i] = NULL;
@@ -172,21 +172,21 @@ void db_close(rag_t *rag) {
     rag->db = NULL;
 }
 
-rag_status_t db_begin(rag_t *rag) { return exec(rag, "BEGIN IMMEDIATE"); }
+rag_status_t rag_db_begin(rag_t *rag) { return exec(rag, "BEGIN IMMEDIATE"); }
 
-rag_status_t db_commit(rag_t *rag) {
+rag_status_t rag_db_commit(rag_t *rag) {
     rag_status_t st = exec(rag, "COMMIT");
-    if (st != RAG_OK) db_rollback(rag);
+    if (st != RAG_OK) rag_db_rollback(rag);
     return st;
 }
 
-void db_rollback(rag_t *rag) {
+void rag_db_rollback(rag_t *rag) {
     if (!sqlite3_get_autocommit(rag->db)) sqlite3_exec(rag->db, "ROLLBACK", NULL, NULL, NULL);
 }
 
 /* ---- meta ---- */
 
-rag_status_t db_get_meta(rag_t *rag, const char *key, char **value) {
+rag_status_t rag_db_get_meta(rag_t *rag, const char *key, char **value) {
     *value = NULL;
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag, "SELECT value FROM meta WHERE key = ?1", &stmt);
@@ -195,7 +195,7 @@ rag_status_t db_get_meta(rag_t *rag, const char *key, char **value) {
     int rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
         *value = column_text(stmt, 0);
-        if (!*value) st = err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+        if (!*value) st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     } else if (rc != SQLITE_DONE) {
         st = db_error(rag);
     }
@@ -203,7 +203,7 @@ rag_status_t db_get_meta(rag_t *rag, const char *key, char **value) {
     return st;
 }
 
-rag_status_t db_set_meta(rag_t *rag, const char *key, const char *value) {
+rag_status_t rag_db_set_meta(rag_t *rag, const char *key, const char *value) {
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag, "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", &stmt);
     if (st != RAG_OK) return st;
@@ -214,7 +214,7 @@ rag_status_t db_set_meta(rag_t *rag, const char *key, const char *value) {
     return st;
 }
 
-rag_status_t db_delete_meta(rag_t *rag, const char *key) {
+rag_status_t rag_db_delete_meta(rag_t *rag, const char *key) {
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag, "DELETE FROM meta WHERE key = ?1", &stmt);
     if (st != RAG_OK) return st;
@@ -224,9 +224,9 @@ rag_status_t db_delete_meta(rag_t *rag, const char *key) {
     return st;
 }
 
-rag_status_t db_get_meta_int(rag_t *rag, const char *key, int64_t *value, bool *found) {
+rag_status_t rag_db_get_meta_int(rag_t *rag, const char *key, int64_t *value, bool *found) {
     char *text;
-    rag_status_t st = db_get_meta(rag, key, &text);
+    rag_status_t st = rag_db_get_meta(rag, key, &text);
     *found = false;
     if (st != RAG_OK || !text) return st;
     char *end;
@@ -239,25 +239,25 @@ rag_status_t db_get_meta_int(rag_t *rag, const char *key, int64_t *value, bool *
     return RAG_OK;
 }
 
-rag_status_t db_set_meta_int(rag_t *rag, const char *key, int64_t value) {
+rag_status_t rag_db_set_meta_int(rag_t *rag, const char *key, int64_t value) {
     char text[32];
     snprintf(text, sizeof(text), "%lld", (long long)value);
-    return db_set_meta(rag, key, text);
+    return rag_db_set_meta(rag, key, text);
 }
 
 /* ---- files ---- */
 
 #define FILE_COLUMNS "id, path, hash, settings, size, mtime, indexed_at"
 
-void db_file_release(db_file_t *f) {
+void rag_db_file_release(db_file_t *f) {
     free(f->path);
     free(f->hash);
     free(f->settings);
     *f = (db_file_t){0};
 }
 
-void db_file_list_free(db_file_list_t *list) {
-    for (size_t i = 0; i < list->count; i++) db_file_release(&list->items[i]);
+void rag_db_file_list_free(db_file_list_t *list) {
+    for (size_t i = 0; i < list->count; i++) rag_db_file_release(&list->items[i]);
     free(list->items);
     *list = (db_file_list_t){0};
 }
@@ -271,11 +271,11 @@ static bool read_file_row(sqlite3_stmt *stmt, db_file_t *f) {
     f->mtime = sqlite3_column_int64(stmt, 5);
     f->indexed_at = sqlite3_column_int64(stmt, 6);
     if (f->path && f->hash && f->settings) return true;
-    db_file_release(f);
+    rag_db_file_release(f);
     return false;
 }
 
-rag_status_t db_find_file(rag_t *rag, const char *path, db_file_t *out, bool *found) {
+rag_status_t rag_db_find_file(rag_t *rag, const char *path, db_file_t *out, bool *found) {
     *found = false;
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag, "SELECT " FILE_COLUMNS " FROM files WHERE path = ?1", &stmt);
@@ -286,7 +286,7 @@ rag_status_t db_find_file(rag_t *rag, const char *path, db_file_t *out, bool *fo
         if (read_file_row(stmt, out))
             *found = true;
         else
-            st = err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+            st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     } else if (rc != SQLITE_DONE) {
         st = db_error(rag);
     }
@@ -294,7 +294,7 @@ rag_status_t db_find_file(rag_t *rag, const char *path, db_file_t *out, bool *fo
     return st;
 }
 
-rag_status_t db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
+rag_status_t rag_db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
     /* paths starting with "dir/" are the ones in ["dir/", "dir0"): '0' follows '/' */
     size_t n = strlen(dir);
     char *lower = n > 0 && dir[n - 1] == '/' ? rag_strdup(dir) : rag_format("%s/", dir);
@@ -302,7 +302,7 @@ rag_status_t db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
     if (!lower || !upper) {
         free(lower);
         free(upper);
-        return err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+        return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     }
     upper[strlen(upper) - 1] = '0';
 
@@ -321,7 +321,7 @@ rag_status_t db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
                 size_t cap = out->cap ? out->cap * 2 : 16;
                 db_file_t *items = realloc(out->items, cap * sizeof(*items));
                 if (!items) {
-                    st = err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+                    st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
                     break;
                 }
                 out->items = items;
@@ -330,7 +330,7 @@ rag_status_t db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
             if (read_file_row(stmt, &out->items[out->count]))
                 out->count++;
             else
-                st = err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+                st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
         }
         if (st == RAG_OK && rc != SQLITE_DONE) st = db_error(rag);
         sqlite3_finalize(stmt);
@@ -357,14 +357,14 @@ static rag_status_t delete_chunks(rag_t *rag, int64_t file_id) {
     return RAG_OK;
 }
 
-rag_status_t db_put_file(rag_t *rag, db_file_t *file) {
+rag_status_t rag_db_put_file(rag_t *rag, db_file_t *file) {
     db_file_t old = {0};
     bool found;
-    rag_status_t st = db_find_file(rag, file->path, &old, &found);
+    rag_status_t st = rag_db_find_file(rag, file->path, &old, &found);
     if (st != RAG_OK) return st;
     if (found) {
         file->id = old.id;
-        db_file_release(&old);
+        rag_db_file_release(&old);
         st = delete_chunks(rag, file->id);
         if (st != RAG_OK) return st;
     }
@@ -390,7 +390,18 @@ rag_status_t db_put_file(rag_t *rag, db_file_t *file) {
     return st;
 }
 
-rag_status_t db_delete_file(rag_t *rag, int64_t id, size_t *chunks) {
+rag_status_t rag_db_set_file_hash(rag_t *rag, int64_t id, const char *hash) {
+    sqlite3_stmt *stmt;
+    rag_status_t st = prepare(rag, "UPDATE files SET hash = ?2 WHERE id = ?1", &stmt);
+    if (st != RAG_OK) return st;
+    sqlite3_bind_int64(stmt, 1, id);
+    bind_text(stmt, 2, hash);
+    st = run(rag, stmt);
+    sqlite3_finalize(stmt);
+    return st;
+}
+
+rag_status_t rag_db_delete_file(rag_t *rag, int64_t id, size_t *chunks) {
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag, "SELECT count(*) FROM chunks WHERE file_id = ?1", &stmt);
     if (st != RAG_OK) return st;
@@ -413,8 +424,8 @@ rag_status_t db_delete_file(rag_t *rag, int64_t id, size_t *chunks) {
 
 /* ---- chunks ---- */
 
-rag_status_t db_add_chunk(rag_t *rag, int64_t file_id, size_t seq, const chunk_span_t *span, const char *text,
-                          size_t text_len, const float *embedding, size_t dims) {
+rag_status_t rag_db_add_chunk(rag_t *rag, int64_t file_id, size_t seq, const chunk_span_t *span, const char *text,
+                              size_t text_len, const float *embedding, size_t dims) {
     sqlite3_stmt *stmt;
     rag_status_t st = cached(rag, STMT_ADD_CHUNK,
                              "INSERT INTO chunks (file_id, seq, start_offset, end_offset, line_start, line_end, text) "
@@ -433,8 +444,8 @@ rag_status_t db_add_chunk(rag_t *rag, int64_t file_id, size_t seq, const chunk_s
     sqlite3_int64 chunk_id = sqlite3_last_insert_rowid(rag->db);
 
     unsigned char *blob = malloc(dims * 4);
-    if (!blob) return err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
-    vec_to_blob(embedding, dims, blob);
+    if (!blob) return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+    rag_vec_to_blob(embedding, dims, blob);
     st = cached(rag, STMT_ADD_VECTOR, "INSERT INTO vectors (chunk_id, embedding) VALUES (?1, ?2)", &stmt);
     if (st == RAG_OK) {
         sqlite3_bind_int64(stmt, 1, chunk_id);
@@ -445,9 +456,71 @@ rag_status_t db_add_chunk(rag_t *rag, int64_t file_id, size_t seq, const chunk_s
     return st;
 }
 
+rag_status_t rag_db_scan_vectors(rag_t *rag, size_t dims, db_vector_fn fn, void *data) {
+    float *v = malloc(dims * sizeof(*v));
+    if (!v) return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+    sqlite3_stmt *stmt;
+    rag_status_t st = prepare(rag, "SELECT chunk_id, embedding FROM vectors", &stmt);
+    if (st != RAG_OK) {
+        free(v);
+        return st;
+    }
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const void *blob = sqlite3_column_blob(stmt, 1);
+        if ((size_t)sqlite3_column_bytes(stmt, 1) != dims * 4 || !blob) {
+            st = rag_err_set(&rag->err, RAG_ERROR_DATABASE,
+                             "database '%s': chunk %lld has an embedding of the wrong size", rag->path,
+                             (long long)sqlite3_column_int64(stmt, 0));
+            break;
+        }
+        rag_vec_from_blob(blob, dims, v);
+        fn(sqlite3_column_int64(stmt, 0), v, data);
+    }
+    if (st == RAG_OK && rc != SQLITE_DONE) st = db_error(rag);
+    sqlite3_finalize(stmt);
+    free(v);
+    return st;
+}
+
+rag_status_t rag_db_get_chunk(rag_t *rag, int64_t chunk_id, rag_result_t *out, bool *found) {
+    *found = false;
+    sqlite3_stmt *stmt;
+    rag_status_t st = prepare(rag,
+                              "SELECT f.path, c.seq, c.start_offset, c.end_offset, c.line_start, c.line_end, c.text "
+                              "FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.id = ?1",
+                              &stmt);
+    if (st != RAG_OK) return st;
+    sqlite3_bind_int64(stmt, 1, chunk_id);
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        char *path = column_text(stmt, 0), *text = column_text(stmt, 6);
+        if (path && text) {
+            out->path = path;
+            out->chunk = (size_t)sqlite3_column_int64(stmt, 1);
+            out->start = (size_t)sqlite3_column_int64(stmt, 2);
+            out->end = (size_t)sqlite3_column_int64(stmt, 3);
+            out->line_start = (size_t)sqlite3_column_int64(stmt, 4);
+            out->line_end = (size_t)sqlite3_column_int64(stmt, 5);
+            out->text = text;
+            *found = true;
+        } else {
+            free(path);
+            free(text);
+            st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+        }
+    } else if (rc != SQLITE_DONE) {
+        st = db_error(rag);
+    }
+    sqlite3_finalize(stmt);
+    return st;
+}
+
+rag_status_t rag_db_begin_read(rag_t *rag) { return exec(rag, "BEGIN"); }
+
 /* ---- statistics ---- */
 
-rag_status_t db_counts(rag_t *rag, db_counts_t *c) {
+rag_status_t rag_db_counts(rag_t *rag, db_counts_t *c) {
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag,
                               "SELECT (SELECT count(*) FROM files), (SELECT count(*) FROM chunks), "

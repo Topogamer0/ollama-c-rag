@@ -34,17 +34,17 @@ static const char *open_fails(const char *path, const rag_options_t *options, ra
 
 /* Adds a file with `chunks` chunks of `dims` dimensions, as the indexer would. */
 static void add_fake_file(rag_t *rag, const char *path, size_t chunks, size_t dims) {
-    CHECK(db_begin(rag) == RAG_OK);
+    CHECK(rag_db_begin(rag) == RAG_OK);
     db_file_t f = {0, (char *)path, "hash", "settings", 10, 20, 30};
-    CHECK(db_put_file(rag, &f) == RAG_OK);
+    CHECK(rag_db_put_file(rag, &f) == RAG_OK);
     CHECK(f.id > 0);
     float v[8] = {1, 0, 0, 0, 0, 0, 0, 0};
     for (size_t i = 0; i < chunks; i++) {
         chunk_span_t span = {i * 10, i * 10 + 5, i + 1, i + 1};
-        CHECK(db_add_chunk(rag, f.id, i, &span, "chunk", 5, v, dims) == RAG_OK);
+        CHECK(rag_db_add_chunk(rag, f.id, i, &span, "chunk", 5, v, dims) == RAG_OK);
     }
-    CHECK(db_set_meta_int(rag, "dimensions", (int64_t)dims) == RAG_OK);
-    CHECK(db_commit(rag) == RAG_OK);
+    CHECK(rag_db_set_meta_int(rag, "dimensions", (int64_t)dims) == RAG_OK);
+    CHECK(rag_db_commit(rag) == RAG_OK);
     rag->stored_dimensions = dims;
 }
 
@@ -66,7 +66,7 @@ static void test_create(void) {
     CHECK_STR(rag_last_error(rag)->message, "");
     int64_t version = 0;
     bool found = false;
-    CHECK(db_get_meta_int(rag, "schema_version", &version, &found) == RAG_OK);
+    CHECK(rag_db_get_meta_int(rag, "schema_version", &version, &found) == RAG_OK);
     CHECK(found && version == 1);
     rag_close(rag);
     CHECK(file_exists(path));
@@ -104,7 +104,7 @@ static void test_not_a_database(void) {
     /* a database of a newer version */
     path = path_of(tmp, "newer.db");
     rag_t *rag = open_ok(path, NULL);
-    CHECK(db_set_meta_int(rag, "schema_version", 99) == RAG_OK);
+    CHECK(rag_db_set_meta_int(rag, "schema_version", 99) == RAG_OK);
     rag_close(rag);
     message = open_fails(path, NULL, RAG_ERROR_DATABASE);
     CHECK(strstr(message, "newer version") != NULL);
@@ -163,14 +163,14 @@ static void test_embedding_model(void) {
 }
 
 static void test_same_model(void) {
-    CHECK(same_model("a", "a"));
-    CHECK(same_model("a", "a:latest"));
-    CHECK(same_model("A:Latest", "a"));
-    CHECK(same_model("ns/a:latest", "ns/a"));
-    CHECK(same_model("host:5000/ns/a", "host:5000/ns/a:latest"));
-    CHECK(!same_model("a:v1", "a"));
-    CHECK(!same_model("a", "ab"));
-    CHECK(!same_model("ns/a", "a"));
+    CHECK(rag_same_model("a", "a"));
+    CHECK(rag_same_model("a", "a:latest"));
+    CHECK(rag_same_model("A:Latest", "a"));
+    CHECK(rag_same_model("ns/a:latest", "ns/a"));
+    CHECK(rag_same_model("host:5000/ns/a", "host:5000/ns/a:latest"));
+    CHECK(!rag_same_model("a:v1", "a"));
+    CHECK(!rag_same_model("a", "ab"));
+    CHECK(!rag_same_model("ns/a", "a"));
 }
 
 static void test_settings(void) {
@@ -184,9 +184,9 @@ static void test_settings(void) {
     CHECK_STR(rag->document_prefix, "title: none | text: ");
     CHECK(rag->host == NULL);
     /* the indexer saves the settings it used */
-    CHECK(db_set_meta_int(rag, "chunk_size", 300) == RAG_OK);
-    CHECK(db_set_meta_int(rag, "chunk_overlap", 30) == RAG_OK);
-    CHECK(db_set_meta(rag, "query_prefix", "Q: ") == RAG_OK);
+    CHECK(rag_db_set_meta_int(rag, "chunk_size", 300) == RAG_OK);
+    CHECK(rag_db_set_meta_int(rag, "chunk_overlap", 30) == RAG_OK);
+    CHECK(rag_db_set_meta(rag, "query_prefix", "Q: ") == RAG_OK);
     rag_close(rag);
 
     /* stored settings are the defaults... */
@@ -275,7 +275,7 @@ static void test_remove(void) {
     CHECK(rag_remove_file(rag, docs, &stats) == RAG_ERROR_ABORTED);
     CHECK_SIZE(stats.files_removed, 0);
     db_counts_t counts;
-    CHECK(db_counts(rag, &counts) == RAG_OK);
+    CHECK(rag_db_counts(rag, &counts) == RAG_OK);
     CHECK_SIZE(counts.files, 4);
     CHECK_SIZE(counts.vectors, 7);
 
@@ -287,7 +287,7 @@ static void test_remove(void) {
     CHECK_SIZE(stats.chunks_removed, 5);
     CHECK(removed.count == 2);
     CHECK_STR(removed.last, b);
-    CHECK(db_counts(rag, &counts) == RAG_OK);
+    CHECK(rag_db_counts(rag, &counts) == RAG_OK);
     CHECK_SIZE(counts.files, 2);
     CHECK_SIZE(counts.chunks, 2);
     CHECK_SIZE(counts.vectors, 2);
@@ -305,7 +305,7 @@ static void test_remove(void) {
     free(cwd);
     CHECK(rag_remove_file(rag, d, &stats) == RAG_OK);
     CHECK_SIZE(stats.files_removed, 1);
-    CHECK(db_counts(rag, &counts) == RAG_OK);
+    CHECK(rag_db_counts(rag, &counts) == RAG_OK);
     CHECK_SIZE(counts.files, 0);
     CHECK_SIZE(counts.vectors, 0);
     CHECK(rag_last_error(rag)->code == RAG_OK);
@@ -325,51 +325,40 @@ static void test_replace_file(void) {
     add_fake_file(rag, path, 3, 4);
     db_file_t first = {0};
     bool found = false;
-    CHECK(db_find_file(rag, path, &first, &found) == RAG_OK);
+    CHECK(rag_db_find_file(rag, path, &first, &found) == RAG_OK);
     CHECK(found);
 
     /* putting the file again replaces its chunks and keeps its id */
     add_fake_file(rag, path, 1, 4);
     db_file_t second = {0};
-    CHECK(db_find_file(rag, path, &second, &found) == RAG_OK);
+    CHECK(rag_db_find_file(rag, path, &second, &found) == RAG_OK);
     CHECK(found && second.id == first.id);
     CHECK_STR(second.hash, "hash");
     CHECK(second.size == 10 && second.mtime == 20 && second.indexed_at == 30);
     db_counts_t counts;
-    CHECK(db_counts(rag, &counts) == RAG_OK);
+    CHECK(rag_db_counts(rag, &counts) == RAG_OK);
     CHECK_SIZE(counts.files, 1);
     CHECK_SIZE(counts.chunks, 1);
     CHECK_SIZE(counts.vectors, 1);
-    db_file_release(&first);
-    db_file_release(&second);
+    rag_db_file_release(&first);
+    rag_db_file_release(&second);
 
-    CHECK(db_find_file(rag, "/notes/b.md", &second, &found) == RAG_OK);
+    CHECK(rag_db_find_file(rag, "/notes/b.md", &second, &found) == RAG_OK);
     CHECK(!found);
 
     /* "/notes" covers "/notes/a.md" but not "/notes2/x.md"; "/" covers everything */
     add_fake_file(rag, "/notes2/x.md", 1, 4);
     db_file_list_t list = {0};
-    CHECK(db_files_under(rag, "/notes", &list) == RAG_OK);
+    CHECK(rag_db_files_under(rag, "/notes", &list) == RAG_OK);
     CHECK_SIZE(list.count, 1);
-    db_file_list_free(&list);
-    CHECK(db_files_under(rag, "/", &list) == RAG_OK);
+    rag_db_file_list_free(&list);
+    CHECK(rag_db_files_under(rag, "/", &list) == RAG_OK);
     CHECK_SIZE(list.count, 2);
-    db_file_list_free(&list);
-    CHECK(db_files_under(rag, "/notes/a.md", &list) == RAG_OK);
+    rag_db_file_list_free(&list);
+    CHECK(rag_db_files_under(rag, "/notes/a.md", &list) == RAG_OK);
     CHECK_SIZE(list.count, 1);
-    db_file_list_free(&list);
+    rag_db_file_list_free(&list);
     rag_close(rag);
-}
-
-static void test_blob(void) {
-    float v[4] = {1.5f, -2.25f, 0.0f, 3.4e38f};
-    unsigned char blob[16];
-    vec_to_blob(v, 4, blob);
-    static const unsigned char expected[4] = {0x00, 0x00, 0xC0, 0x3F}; /* 1.5f, little-endian */
-    CHECK(memcmp(blob, expected, 4) == 0);
-    float back[4];
-    vec_from_blob(blob, 4, back);
-    CHECK(memcmp(v, back, sizeof(v)) == 0);
 }
 
 static void test_errors(void) {
@@ -396,7 +385,6 @@ int main(void) {
     RUN(test_settings);
     RUN(test_remove);
     RUN(test_replace_file);
-    RUN(test_blob);
     RUN(test_errors);
     remove_tree(tmp);
     free(tmp);

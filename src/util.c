@@ -28,7 +28,7 @@ static bool buf_reserve(buf_t *b, size_t extra) {
     return true;
 }
 
-bool buf_append(buf_t *b, const void *data, size_t len) {
+bool rag_buf_append(buf_t *b, const void *data, size_t len) {
     if (!buf_reserve(b, len)) return false;
     if (len) memcpy(b->data + b->len, data, len);
     b->len += len;
@@ -36,11 +36,11 @@ bool buf_append(buf_t *b, const void *data, size_t len) {
     return true;
 }
 
-bool buf_puts(buf_t *b, const char *s) { return buf_append(b, s, strlen(s)); }
+bool rag_buf_puts(buf_t *b, const char *s) { return rag_buf_append(b, s, strlen(s)); }
 
-bool buf_putc(buf_t *b, char c) { return buf_append(b, &c, 1); }
+bool rag_buf_putc(buf_t *b, char c) { return rag_buf_append(b, &c, 1); }
 
-bool buf_printf(buf_t *b, const char *fmt, ...) {
+bool rag_buf_printf(buf_t *b, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     char *s = rag_vformat(fmt, ap);
@@ -49,26 +49,26 @@ bool buf_printf(buf_t *b, const char *fmt, ...) {
         b->oom = true;
         return false;
     }
-    bool ok = buf_puts(b, s);
+    bool ok = rag_buf_puts(b, s);
     free(s);
     return ok;
 }
 
-const char *buf_cstr(buf_t *b) {
+const char *rag_buf_cstr(buf_t *b) {
     if (b->oom) return NULL;
     if (!b->data && !buf_reserve(b, 0)) return NULL;
     b->data[b->len] = '\0';
     return b->data;
 }
 
-char *buf_take(buf_t *b) {
-    char *s = buf_cstr(b) ? b->data : NULL;
-    if (!s) buf_free(b);
+char *rag_buf_take(buf_t *b) {
+    char *s = rag_buf_cstr(b) ? b->data : NULL;
+    if (!s) rag_buf_free(b);
     *b = (buf_t){0};
     return s;
 }
 
-void buf_free(buf_t *b) {
+void rag_buf_free(buf_t *b) {
     free(b->data);
     *b = (buf_t){0};
 }
@@ -106,21 +106,21 @@ char *rag_format(const char *fmt, ...) {
 
 /* ---- errors ---- */
 
-void err_init(err_t *e) {
+void rag_err_init(err_t *e) {
     e->pub.code = RAG_OK;
     e->pub.status_code = -1;
     e->pub.message = "";
     e->msg = NULL;
 }
 
-void err_clear(err_t *e) {
+void rag_err_clear(err_t *e) {
     free(e->msg);
-    err_init(e);
+    rag_err_init(e);
 }
 
-void err_free(err_t *e) { err_clear(e); }
+void rag_err_free(err_t *e) { rag_err_clear(e); }
 
-rag_status_t err_set(err_t *e, rag_status_t code, const char *fmt, ...) {
+rag_status_t rag_err_set(err_t *e, rag_status_t code, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     char *msg = rag_vformat(fmt, ap);

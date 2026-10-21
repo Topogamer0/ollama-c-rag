@@ -18,7 +18,7 @@ static const char *const TEXT_EXTENSIONS[] = {".txt", ".md", ".markdown", ".text
 
 static char lower(char c) { return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c; }
 
-bool fs_is_text_file(const char *name) {
+bool rag_fs_is_text_file(const char *name) {
     size_t n = strlen(name);
     for (size_t i = 0; i < sizeof(TEXT_EXTENSIONS) / sizeof(TEXT_EXTENSIONS[0]); i++) {
         size_t m = strlen(TEXT_EXTENSIONS[i]);
@@ -58,7 +58,7 @@ static void normalize(char *path) {
     path[out] = '\0';
 }
 
-char *fs_canonical(const char *path) {
+char *rag_fs_canonical(const char *path) {
     if (!path || !*path) return NULL;
     char *abs;
     if (path[0] == '/') {
@@ -99,12 +99,12 @@ char *fs_canonical(const char *path) {
     return abs;
 }
 
-rag_status_t fs_stat(const char *path, fs_info_t *info, err_t *e) {
+rag_status_t rag_fs_stat(const char *path, fs_info_t *info, err_t *e) {
     struct stat st;
     if (stat(path, &st) != 0) {
         int code = errno;
-        return err_set(e, code == ENOENT || code == ENOTDIR ? RAG_ERROR_NOT_FOUND : RAG_ERROR_IO,
-                       "cannot access '%s': %s", path, strerror(code));
+        return rag_err_set(e, code == ENOENT || code == ENOTDIR ? RAG_ERROR_NOT_FOUND : RAG_ERROR_IO,
+                           "cannot access '%s': %s", path, strerror(code));
     }
     info->is_dir = S_ISDIR(st.st_mode);
     info->is_file = S_ISREG(st.st_mode);
@@ -113,18 +113,18 @@ rag_status_t fs_stat(const char *path, fs_info_t *info, err_t *e) {
     return RAG_OK;
 }
 
-rag_status_t fs_read_file(const char *path, buf_t *out, err_t *e) {
+rag_status_t rag_fs_read_file(const char *path, buf_t *out, err_t *e) {
     FILE *f = fopen(path, "rb");
-    if (!f) return err_set(e, RAG_ERROR_IO, "cannot read '%s': %s", path, strerror(errno));
+    if (!f) return rag_err_set(e, RAG_ERROR_IO, "cannot read '%s': %s", path, strerror(errno));
     char chunk[16384];
     size_t n;
     while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0)
-        if (!buf_append(out, chunk, n)) break;
+        if (!rag_buf_append(out, chunk, n)) break;
     int failed = ferror(f);
     int code = errno;
     fclose(f);
-    if (out->oom || !buf_cstr(out)) return err_set(e, RAG_ERROR_MEMORY, "out of memory");
-    if (failed) return err_set(e, RAG_ERROR_IO, "cannot read '%s': %s", path, strerror(code));
+    if (out->oom || !rag_buf_cstr(out)) return rag_err_set(e, RAG_ERROR_MEMORY, "out of memory");
+    if (failed) return rag_err_set(e, RAG_ERROR_IO, "cannot read '%s': %s", path, strerror(code));
     return RAG_OK;
 }
 
@@ -186,7 +186,7 @@ static bool walk(const char *dir, int depth, fs_list_t *out) {
         if (S_ISDIR(st.st_mode)) {
             ok = walk(path, depth + 1, out);
             free(path);
-        } else if (S_ISREG(st.st_mode) && fs_is_text_file(ent->d_name)) {
+        } else if (S_ISREG(st.st_mode) && rag_fs_is_text_file(ent->d_name)) {
             ok = add_entry(out, path, NULL);
         } else {
             free(path);
@@ -196,21 +196,21 @@ static bool walk(const char *dir, int depth, fs_list_t *out) {
     return ok;
 }
 
-rag_status_t fs_list_dir(const char *dir, fs_list_t *out, err_t *e) {
+rag_status_t rag_fs_list_dir(const char *dir, fs_list_t *out, err_t *e) {
     fs_info_t info;
-    rag_status_t st = fs_stat(dir, &info, e);
+    rag_status_t st = rag_fs_stat(dir, &info, e);
     if (st != RAG_OK) return st;
-    if (!info.is_dir) return err_set(e, RAG_ERROR_INVALID, "'%s' is not a directory", dir);
+    if (!info.is_dir) return rag_err_set(e, RAG_ERROR_INVALID, "'%s' is not a directory", dir);
     DIR *d = opendir(dir);
-    if (!d) return err_set(e, RAG_ERROR_IO, "cannot open directory '%s': %s", dir, strerror(errno));
+    if (!d) return rag_err_set(e, RAG_ERROR_IO, "cannot open directory '%s': %s", dir, strerror(errno));
     closedir(d);
 
-    if (!walk(dir, 0, out)) return err_set(e, RAG_ERROR_MEMORY, "out of memory");
+    if (!walk(dir, 0, out)) return rag_err_set(e, RAG_ERROR_MEMORY, "out of memory");
     qsort(out->items, out->count, sizeof(*out->items), compare_entries);
     return RAG_OK;
 }
 
-void fs_list_free(fs_list_t *list) {
+void rag_fs_list_free(fs_list_t *list) {
     for (size_t i = 0; i < list->count; i++) {
         free(list->items[i].path);
         free(list->items[i].error);

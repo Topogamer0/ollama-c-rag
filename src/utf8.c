@@ -3,7 +3,7 @@
 
 #include <stdlib.h>
 
-size_t utf8_decode(const char *s, size_t len, size_t i, uint32_t *cp) {
+size_t rag_utf8_decode(const char *s, size_t len, size_t i, uint32_t *cp) {
     const unsigned char *u = (const unsigned char *)s + i;
     size_t avail = len - i;
     unsigned char c = u[0];
@@ -40,34 +40,34 @@ size_t utf8_decode(const char *s, size_t len, size_t i, uint32_t *cp) {
     return n;
 }
 
-size_t utf8_char_len(const char *s, size_t len, size_t i) {
+size_t rag_utf8_char_len(const char *s, size_t len, size_t i) {
     uint32_t cp;
-    size_t n = utf8_decode(s, len, i, &cp);
+    size_t n = rag_utf8_decode(s, len, i, &cp);
     return n ? n : 1;
 }
 
-size_t utf8_advance(const char *s, size_t len, size_t i, size_t n) {
+size_t rag_utf8_advance(const char *s, size_t len, size_t i, size_t n) {
     while (n > 0 && i < len) {
-        i += utf8_char_len(s, len, i);
+        i += rag_utf8_char_len(s, len, i);
         n--;
     }
     return i;
 }
 
-size_t utf8_count(const char *s, size_t i, size_t j) {
+size_t rag_utf8_count(const char *s, size_t i, size_t j) {
     size_t n = 0;
     while (i < j) {
-        i += utf8_char_len(s, j, i);
+        i += rag_utf8_char_len(s, j, i);
         n++;
     }
     return n;
 }
 
-char *utf8_sanitize(const char *s, size_t len, size_t *out_len) {
+char *rag_utf8_sanitize(const char *s, size_t len, size_t *out_len) {
     size_t invalid = 0;
     for (size_t i = 0; i < len;) {
         uint32_t cp;
-        size_t n = utf8_decode(s, len, i, &cp);
+        size_t n = rag_utf8_decode(s, len, i, &cp);
         if (!n) invalid++;
         i += n ? n : 1;
     }
@@ -79,7 +79,7 @@ char *utf8_sanitize(const char *s, size_t len, size_t *out_len) {
     size_t o = 0;
     for (size_t i = 0; i < len;) {
         uint32_t cp;
-        size_t n = utf8_decode(s, len, i, &cp);
+        size_t n = rag_utf8_decode(s, len, i, &cp);
         if (n) {
             for (size_t k = 0; k < n; k++) out[o++] = s[i + k];
             i += n;
