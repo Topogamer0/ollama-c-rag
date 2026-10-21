@@ -178,7 +178,7 @@ static wchar_t *full_path(const wchar_t *w, os_error_t *oe) {
  * A path for the "W" functions: UTF-16, with "\" separators. Paths of
  * MAX_PATH characters or more get the "\\?\" prefix, which lifts the limit.
  */
-static wchar_t *wide_path(const char *path, os_error_t *oe) {
+wchar_t *rag_os_wide_path(const char *path, os_error_t *oe) {
     wchar_t *w = widen(path, oe);
     if (!w) return NULL;
     for (wchar_t *p = w; *p; p++)
@@ -257,7 +257,7 @@ char *rag_os_absolute(const char *path, os_error_t *oe) {
 
 /* Opens a file or a directory to read its attributes, following links. */
 static HANDLE open_handle(const char *path, os_error_t *oe) {
-    wchar_t *w = wide_path(path, oe);
+    wchar_t *w = rag_os_wide_path(path, oe);
     if (!w) return INVALID_HANDLE_VALUE;
     HANDLE h = CreateFileW(w, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
@@ -341,7 +341,7 @@ static bool is_link_tag(DWORD attributes, DWORD tag) {
 static bool has_wildcards(const char *path) { return strchr(path, '*') || strchr(path, '?'); }
 
 bool rag_os_stat(const char *path, bool follow, os_stat_t *st, os_error_t *oe) {
-    wchar_t *w = wide_path(path, oe);
+    wchar_t *w = rag_os_wide_path(path, oe);
     if (!w) return false;
     WIN32_FILE_ATTRIBUTE_DATA a;
     BOOL ok = GetFileAttributesExW(w, GetFileExInfoStandard, &a);
@@ -391,7 +391,7 @@ FILE *rag_os_fopen(const char *path, const char *mode, os_error_t *oe) {
         return NULL;
     }
     for (size_t i = 0; i <= n; i++) wmode[i] = (wchar_t)(unsigned char)mode[i];
-    wchar_t *w = wide_path(path, oe);
+    wchar_t *w = rag_os_wide_path(path, oe);
     if (!w) return NULL;
     FILE *f = _wfopen(w, wmode);
     int code = errno;
@@ -402,7 +402,7 @@ FILE *rag_os_fopen(const char *path, const char *mode, os_error_t *oe) {
 
 char *rag_os_disk_name(const char *path) {
     if (has_wildcards(path)) return NULL;
-    wchar_t *w = wide_path(path, NULL);
+    wchar_t *w = rag_os_wide_path(path, NULL);
     if (!w) return NULL;
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(w, &fd);
@@ -435,7 +435,7 @@ os_dir_t *rag_os_opendir(const char *path, os_error_t *oe) {
         no_memory(oe);
         return NULL;
     }
-    wchar_t *w = wide_path(pattern, oe);
+    wchar_t *w = rag_os_wide_path(pattern, oe);
     free(pattern);
     os_dir_t *d = w ? calloc(1, sizeof(*d)) : NULL;
     if (w && !d) no_memory(oe);

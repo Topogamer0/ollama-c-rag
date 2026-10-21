@@ -100,6 +100,11 @@ void rag_os_closedir(os_dir_t *d);
 /* Conversions between UTF-8 and UTF-16, to free; NULL if out of memory or not valid UTF-8. */
 wchar_t *rag_os_to_wide(const char *s);
 char *rag_os_from_wide(const wchar_t *s);
+/*
+ * A path for the "W" functions, to free: UTF-16, with "\" separators, and the
+ * "\\?\" prefix when it is too long for MAX_PATH.
+ */
+wchar_t *rag_os_wide_path(const char *path, os_error_t *oe);
 #endif
 
 #endif

@@ -47,8 +47,9 @@ static inline void string_append(string_t *s, const char *text) {
 }
 
 #ifdef _WIN32
+/* A path for the "W" functions, long ones included. */
 static inline wchar_t *test_wide(const char *path) {
-    wchar_t *w = rag_os_to_wide(path);
+    wchar_t *w = rag_os_wide_path(path, NULL);
     if (!w) {
         fprintf(stderr, "invalid path: %s\n", path);
         exit(2);
@@ -128,7 +129,8 @@ static inline bool make_link(const char *target, const char *path, bool to_dir) 
 #endif
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (ntdll && GetProcAddress(ntdll, "wine_get_version")) return false;
-    wchar_t *t = test_wide(target), *w = test_wide(path);
+    wchar_t *t = rag_os_to_wide(target), *w = test_wide(path);
+    if (!t) exit(2);
     for (wchar_t *p = t; *p; p++)
         if (*p == L'/') *p = L'\\';
     DWORD flags = (to_dir ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0) | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
