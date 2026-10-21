@@ -113,7 +113,7 @@ jobs:
         run: >
           cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:TOOLCHAIN"
           -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DRAG_WERROR=ON -DRAG_INSTALL_RUNTIME_DLLS=ON
-          -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS ${{ matrix.lean }}" -DCMAKE_INSTALL_LIBDIR="$PWD/prefix/lib"
+          -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS ${{ matrix.lean }}" -DCMAKE_INSTALL_LIBDIR="$PWD/prefix/lib" -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
       - name: Build
         run: cmake --build build --config Debug -j
       - name: Test
