@@ -363,8 +363,11 @@ static int cmd_index(cli_t *c, rag_t *rag) {
     rag_index_stats_t total = {0};
     int code = 0;
     for (int i = 0; i < c->nargs; i++) {
+        /* the path as the library reads it ("dir.\" is "dir" on Windows) */
+        char *abs = rag_os_absolute(c->args[i], NULL);
         os_stat_t st;
-        bool dir = rag_os_stat(c->args[i], true, &st, NULL) && st.type == RAG_OS_DIR;
+        bool dir = abs && rag_os_stat(abs, true, &st, NULL) && st.type == RAG_OS_DIR;
+        free(abs);
         rag_index_stats_t s;
         rag_status_t rc = dir ? rag_add_dir(rag, c->args[i], &s) : rag_add_file(rag, c->args[i], &s);
         total.files_indexed += s.files_indexed;

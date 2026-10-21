@@ -152,7 +152,8 @@ int main(void) {
 The [`examples`](examples) directory also has [`index-notes`](examples/index-notes.c), which indexes a
 folder and reports the progress, and [`chat-docs`](examples/chat-docs.c), an interactive chat over your
 documents. They are built in `build/examples/` (`build\bin\<config>` on Windows, where they get their
-arguments in UTF-8 on Windows 10 1903 or later; run `chcp 65001` first to see their output in UTF-8).
+arguments in UTF-8 on Windows 10 1903 or later; `chat-docs` switches the console to UTF-8 itself, for
+`index-notes` run `chcp 65001` first).
 
 ## The `ragc` command
 
@@ -179,7 +180,7 @@ ragc [options] <command> [arguments]
 | `--chunk-size N`, `--chunk-overlap N` | chunking, in characters (default: the database's, or 800 and 100; the default overlap is at most a quarter of the chunk size) |
 | `--batch-size N` | chunks per embedding request (default: 32, at most 65536) |
 | `--dimensions N` | size of the embeddings, for models that can shorten them |
-| `--system TEXT` | system prompt of the chat model (`""` for none) |
+| `--system TEXT` | system prompt of the chat model (`--system=` for none) |
 | `--timeout SECONDS` | network timeout (default: none) |
 | `-q`, `--quiet` | print only the results: no progress, no sources |
 
@@ -217,9 +218,10 @@ Choose another database with --db.
 
 Every [release](https://github.com/Topogamer0/ollama-c-rag/releases) has a
 `ragc-<version>-windows-x64.zip`: `ragc.exe` with the DLLs it needs (libcurl, zlib, the C
-runtime), for Windows 10 or later on x64. Unzip it anywhere, for example in `C:\Tools\ragc`, and add
-that directory to `PATH` (Settings > System > About > Advanced system settings > Environment
-Variables), or run `ragc.exe` by its full path. Windows may warn about a program downloaded from
+runtime), for Windows 10 or later on x64. It holds a `ragc-<version>-windows-x64` folder: extract it
+anywhere, for example in `C:\Tools`, and add `C:\Tools\ragc-<version>-windows-x64` to `PATH`
+(Settings > System > About > Advanced system settings > Environment Variables), or run `ragc.exe`
+by its full path. Windows may warn about a program downloaded from
 the internet ("Windows protected your PC": More info > Run anyway, or `Unblock-File ragc.exe` in
 PowerShell). You also need [Ollama for Windows](https://ollama.com/download/windows), running, and
 the models:
@@ -258,8 +260,9 @@ Sources:
 - **The database** is `ragc.db` in the current directory, or `--db`, or the `RAGC_DB` variable:
   `set RAGC_DB=C:\Users\me\notes.db` in the Command Prompt, `$env:RAGC_DB = "C:\Users\me\notes.db"` in
   PowerShell, `setx RAGC_DB C:\Users\me\notes.db` to keep it for the next windows.
-- **Questions** need quotes only around the characters that the shell interprets: `&`, `|`, `<`,
-  `>`, `^` in the Command Prompt, and also `;`, `(`, `$`, `` ` `` and `'` in PowerShell.
+- **Questions** need quotes when they contain characters that the shell interprets: `&`, `|`, `<`,
+  `>`, `^` in the Command Prompt; in PowerShell, anything but letters, digits, spaces and
+  `. , : ? !` (`#` starts a comment there, so `ragc ask step #3` would ask "step").
 - **The output** is UTF-8: `ragc` switches the console to UTF-8 while it runs. When PowerShell reads
   it (in a pipe, or in a variable), it decodes it with `[Console]::OutputEncoding`: run
   `[Console]::OutputEncoding = [Text.Encoding]::UTF8` first.

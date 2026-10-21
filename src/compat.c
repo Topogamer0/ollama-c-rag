@@ -93,8 +93,6 @@ static bool is_not_found(DWORD code) {
     case ERROR_FILE_NOT_FOUND:
     case ERROR_PATH_NOT_FOUND:
     case ERROR_INVALID_DRIVE:
-    case ERROR_BAD_NETPATH:
-    case ERROR_BAD_NET_NAME:
     case ERROR_INVALID_NAME:
     case ERROR_BAD_PATHNAME:
     case ERROR_DIRECTORY: return true;
@@ -174,25 +172,44 @@ static wchar_t *full_path(const wchar_t *w, os_error_t *oe) {
     }
 }
 
-/*
- * A path for the "W" functions: UTF-16, with "\" separators. Paths of
- * MAX_PATH characters or more get the "\\?\" prefix, which lifts the limit.
- */
+/* True for a full path without empty, "." or ".." components, which Windows can take as it is. */
+static bool is_normalized(const char *path) {
+    size_t root = rag_os_root_len(path);
+    if (root == 0) return false;
+    for (const char *p = path + root; *p;) {
+        const char *end = p;
+        while (*end && !rag_os_is_sep(*end)) end++;
+        size_t n = (size_t)(end - p);
+        if (n == 0 || (n == 1 && p[0] == '.') || (n == 2 && p[0] == '.' && p[1] == '.')) return false;
+        if (*end && !end[1]) return false; /* a separator at the end */
+        p = *end ? end + 1 : end;
+    }
+    return true;
+}
+
 wchar_t *rag_os_wide_path(const char *path, os_error_t *oe) {
     wchar_t *w = widen(path, oe);
     if (!w) return NULL;
     for (wchar_t *p = w; *p; p++)
         if (*p == L'/') *p = L'\\';
-    /* 248: the limit of directories, which leaves room for an 8.3 file name */
-    if (wcslen(w) < 248 || starts_with(w, L"\\\\?\\") || starts_with(w, L"\\\\.\\")) return w;
-    wchar_t *full = full_path(w, oe);
-    free(w);
-    if (!full) return NULL;
-    bool unc = starts_with(full, L"\\\\");
-    bool drive = full[0] && full[1] == L':' && full[2] == L'\\';
-    if (!unc && !drive) return full;
+    if (starts_with(w, L"\\\\?\\") || starts_with(w, L"\\\\.\\")) return w;
+    if (!is_normalized(path)) {
+        /* relative, or with "." and "..": read as Windows reads it, and MAX_PATH applies to the full path */
+        wchar_t *full = full_path(w, oe);
+        free(w);
+        if (!full || starts_with(full, L"\\\\?\\") || starts_with(full, L"\\\\.\\")) return full; /* "con" */
+        w = full;
+    }
+    bool unc = starts_with(w, L"\\\\");
+    bool drive = w[0] && w[1] == L':' && w[2] == L'\\';
+    if (!unc && !drive) return w;
+    /*
+     * "\\?\" lifts the limit of MAX_PATH, and keeps the names as they are:
+     * Windows would otherwise drop a final "." ("v1." is a directory of its
+     * own) and read "con" or "nul" as devices.
+     */
     const wchar_t *prefix = unc ? L"\\\\?\\UNC" : L"\\\\?\\";
-    const wchar_t *rest = unc ? full + 1 : full; /* "\\server\share" -> "\\?\UNC\server\share" */
+    const wchar_t *rest = unc ? w + 1 : w; /* "\\server\share" -> "\\?\UNC\server\share" */
     size_t n = wcslen(prefix), m = wcslen(rest);
     wchar_t *long_path = malloc((n + m + 1) * sizeof(*long_path));
     if (long_path) {
@@ -201,7 +218,7 @@ wchar_t *rag_os_wide_path(const char *path, os_error_t *oe) {
     } else {
         no_memory(oe);
     }
-    free(full);
+    free(w);
     return long_path;
 }
 
@@ -266,6 +283,43 @@ static HANDLE open_handle(const char *path, os_error_t *oe) {
     return h;
 }
 
+/* The full path of an existing file, with every component spelled as on the disk, and the drive letter in capitals. */
+static char *disk_spelling(const char *path, os_error_t *oe) {
+    char *abs = rag_os_absolute(path, oe);
+    if (!abs) return NULL;
+    size_t root = rag_os_root_len(abs);
+    if (root >= 2 && abs[1] == ':' && abs[0] >= 'a' && abs[0] <= 'z') abs[0] = (char)(abs[0] - 'a' + 'A');
+    char *result = malloc(root + 1);
+    if (!result) {
+        free(abs);
+        no_memory(oe);
+        return NULL;
+    }
+    memcpy(result, abs, root);
+    result[root] = '\0';
+    for (char *p = abs + root; *p && result;) {
+        char *end = p;
+        while (*end && !rag_os_is_sep(*end)) end++;
+        char saved = *end;
+        *end = '\0';
+        size_t n = strlen(result);
+        char *next = concat(result, n > 0 && !rag_os_is_sep(result[n - 1]) ? "\\" : "", p);
+        char *name = next ? rag_os_disk_name(next) : NULL;
+        if (name) {
+            free(next);
+            next = concat(result, n > 0 && !rag_os_is_sep(result[n - 1]) ? "\\" : "", name);
+            free(name);
+        }
+        free(result);
+        result = next;
+        *end = saved;
+        p = saved ? end + 1 : end;
+    }
+    free(abs);
+    if (!result) no_memory(oe);
+    return result;
+}
+
 char *rag_os_realpath(const char *path, os_error_t *oe) {
     HANDLE h = open_handle(path, oe);
     if (h == INVALID_HANDLE_VALUE) return NULL;
@@ -283,8 +337,8 @@ char *rag_os_realpath(const char *path, os_error_t *oe) {
         result = rag_os_from_wide(strip_long_prefix(final));
         if (!result) no_memory(oe);
     } else {
-        /* some file systems cannot tell (e.g. a volume without a drive letter): the full path will do */
-        result = rag_os_absolute(path, oe);
+        /* some volumes cannot tell (RAM disks, ...): the full path, spelled as on the disk */
+        result = disk_spelling(path, oe);
     }
     free(final);
     return result;
@@ -460,7 +514,13 @@ bool rag_os_readdir(os_dir_t *d, const os_dirent_t **ent, os_error_t *oe) {
     *ent = NULL;
     for (;;) {
         if (!d->pending) {
-            if (d->find == INVALID_HANDLE_VALUE || !FindNextFileW(d->find, &d->data)) return true;
+            if (d->find == INVALID_HANDLE_VALUE) return true;
+            if (!FindNextFileW(d->find, &d->data)) {
+                DWORD code = GetLastError();
+                if (code == ERROR_NO_MORE_FILES) return true;
+                set_error(oe, code); /* cut short: the files not listed must not look deleted */
+                return false;
+            }
         }
         d->pending = false;
         const wchar_t *name = d->data.cFileName;
@@ -596,16 +656,22 @@ os_dir_t *rag_os_opendir(const char *path, os_error_t *oe) {
 }
 
 bool rag_os_readdir(os_dir_t *d, const os_dirent_t **ent, os_error_t *oe) {
-    (void)oe;
     *ent = NULL;
     struct dirent *e;
-    while ((e = readdir(d->dir)) != NULL) {
+    for (;;) {
+        errno = 0;
+        e = readdir(d->dir);
+        if (!e) break;
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         d->ent.name = e->d_name;
         d->ent.hidden = e->d_name[0] == '.';
         d->ent.has_stat = false;
         *ent = &d->ent;
         return true;
+    }
+    if (errno) {
+        set_errno(oe, errno); /* cut short: the files not listed must not look deleted */
+        return false;
     }
     return true;
 }

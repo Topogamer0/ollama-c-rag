@@ -942,6 +942,26 @@ static void test_renamed_in_case(void) {
     /* indexing the file again finds it up to date */
     CHECK(rag_add_file(rag, path_of(dir, "fruit.md"), &stats) == RAG_OK);
     CHECK_SIZE(stats.files_unchanged, 1);
+
+#ifdef _WIN32
+    /* a directory renamed in another case, indexed by its new name */
+    char *notes = dup_string(path_of(dir, "Notes"));
+    write_file(path_of(notes, "a.md"), "Cherries are red.");
+    CHECK(rag_add_dir(rag, notes, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    remove_tree(notes);
+    write_file(path_of(dir, "notes/a.md"), "Cherries are red.");
+    CHECK(rag_add_dir(rag, path_of(dir, "notes"), &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    CHECK_SIZE(stats.files_removed, 1);
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 3);
+    /* and a deleted file removed by another spelling */
+    remove_file(path_of(dir, "notes/a.md"));
+    CHECK(rag_remove_file(rag, path_of(dir, "NOTES/A.MD"), &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_removed, 1);
+    free(notes);
+#endif
     rag_close(rag);
     free(dir);
 }

@@ -98,7 +98,10 @@ static inline bool remove_file(const char *path) {
 /* chdir(). */
 static inline bool change_dir(const char *path) {
 #ifdef _WIN32
-    wchar_t *w = test_wide(path);
+    wchar_t *w = rag_os_to_wide(path); /* without \\?\, which the current directory does not take */
+    if (!w) exit(2);
+    for (wchar_t *p = w; *p; p++)
+        if (*p == L'/') *p = L'\\';
     bool ok = SetCurrentDirectoryW(w) != 0;
     free(w);
     return ok;

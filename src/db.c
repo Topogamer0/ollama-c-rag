@@ -315,11 +315,21 @@ rag_status_t rag_db_files_under(rag_t *rag, const char *dir, db_file_list_t *out
     }
     upper[strlen(upper) - 1] = (char)(RAG_PATH_SEP + 1);
 
+    /*
+     * Names do not depend on case on Windows: a directory renamed in another
+     * case still covers its files (ASCII letters only). The order stays binary.
+     */
+#ifdef _WIN32
+#define PATH_COLLATION " COLLATE NOCASE"
+#else
+#define PATH_COLLATION ""
+#endif
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag,
-                              "SELECT " FILE_COLUMNS " FROM files "
-                              "WHERE path = ?1 OR (path >= ?2 AND path < ?3) ORDER BY path",
+                              "SELECT " FILE_COLUMNS " FROM files WHERE path = ?1" PATH_COLLATION
+                              " OR (path >= ?2" PATH_COLLATION " AND path < ?3" PATH_COLLATION ") ORDER BY path",
                               &stmt);
+#undef PATH_COLLATION
     if (st == RAG_OK) {
         bind_text(stmt, 1, dir);
         bind_text(stmt, 2, lower);

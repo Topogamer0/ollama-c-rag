@@ -212,7 +212,9 @@ static bool walk(const char *dir, int depth, fs_list_t *out) {
     const os_dirent_t *ent;
     while (ok) {
         if (!rag_os_readdir(d, &ent, &oe)) {
-            ok = oe.kind != RAG_OS_NO_MEMORY; /* else the listing ends there, like readdir() */
+            /* reported, so that the files that were not listed are not removed from the index */
+            ok = oe.kind != RAG_OS_NO_MEMORY &&
+                 add_entry(out, rag_strdup(dir), rag_format("cannot read directory: %s", oe.message));
             break;
         }
         if (!ent) break;
