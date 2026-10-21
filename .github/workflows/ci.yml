@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.compiler }}, shared=${{ matrix.shared }}, sanitizers)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        shared: [OFF, ON]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libcurl
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          -DBUILD_SHARED_LIBS=${{ matrix.shared }}
+          -DCMAKE_C_FLAGS="-Werror -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  linux-install:
+    name: Linux (release, system SQLite, install)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libcurl and SQLite
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsqlite3-dev
+      - name: Build and test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRAG_USE_SYSTEM_SQLITE=ON -DCMAKE_C_FLAGS=-Werror
+          cmake --build build -j
+          ctest --test-dir build --output-on-failure
+      - name: Install and use the package
+        run: |
+          cmake --install build --prefix "$PWD/prefix"
+          cmake -S tests/install -B build-consumer -DCMAKE_PREFIX_PATH="$PWD/prefix"
+          cmake --build build-consumer
+          ./build-consumer/consumer
+          cc -std=c99 tests/install/main.c $(PKG_CONFIG_PATH="$PWD/prefix/lib/pkgconfig" pkg-config --cflags --libs ollama-rag-c) -o consumer-pc
+          ./consumer-pc
+          ./prefix/bin/ragc --version
+
+  macos:
+    name: macOS (sanitizers=${{ matrix.sanitizers }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizers: [OFF, ON]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          FLAGS="-Werror"
+          if [ "${{ matrix.sanitizers }}" = ON ]; then
+            FLAGS="$FLAGS -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="$FLAGS"
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

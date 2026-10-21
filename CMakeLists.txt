@@ -1,0 +1,214 @@
+cmake_minimum_required(VERSION 3.14)
+
+project(ollama-rag-c
+    VERSION 0.1.0
+    DESCRIPTION "Local Retrieval-Augmented Generation in C, with Ollama and SQLite"
+    LANGUAGES C)
+
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(RAG_TOP_LEVEL ON)
+else()
+    set(RAG_TOP_LEVEL OFF)
+endif()
+
+option(BUILD_SHARED_LIBS "Build ollama-rag as a shared library" OFF)
+option(RAG_BUILD_CLI "Build the ragc command line tool" ON)
+option(RAG_BUILD_EXAMPLES "Build the examples" ${RAG_TOP_LEVEL})
+option(RAG_BUILD_TESTS "Build the tests" ${RAG_TOP_LEVEL})
+option(RAG_INSTALL "Generate the install target" ${RAG_TOP_LEVEL})
+option(RAG_USE_SYSTEM_SQLITE "Link the system SQLite instead of the bundled amalgamation" OFF)
+option(RAG_USE_SYSTEM_OLLAMA_C "Use an installed ollama-c instead of downloading it" OFF)
+
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    set(RAG_WARNINGS -Wall -Wextra -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wvla)
+elseif(MSVC)
+    set(RAG_WARNINGS /W4)
+endif()
+
+# ---- dependencies ----
+
+if(RAG_USE_SYSTEM_OLLAMA_C)
+    find_package(ollama-c 0.1 REQUIRED)
+else()
+    # installed along with ollama-rag-c, which needs it
+    set(OLLAMA_INSTALL ${RAG_INSTALL})
+    set(OLLAMA_BUILD_TESTS OFF)
+    set(OLLAMA_BUILD_EXAMPLES OFF)
+    include(FetchContent)
+    FetchContent_Declare(ollama_c
+        GIT_REPOSITORY https://github.com/Topogamer0/Ollama-C.git
+        GIT_TAG v0.1.0
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(ollama_c)
+endif()
+
+# after Ollama-C, so that it keeps its own documentation directory
+include(GNUInstallDirs)
+
+if(RAG_USE_SYSTEM_SQLITE)
+    find_package(SQLite3 REQUIRED)
+else()
+    # The amalgamation is compiled with the library, without warnings: it is not our code.
+    find_package(Threads REQUIRED)
+    add_library(rag_sqlite OBJECT third_party/sqlite/sqlite3.c)
+    target_compile_definitions(rag_sqlite PRIVATE
+        SQLITE_THREADSAFE=1
+        SQLITE_DQS=0
+        SQLITE_DEFAULT_MEMSTATUS=0
+        SQLITE_OMIT_LOAD_EXTENSION
+        SQLITE_OMIT_DEPRECATED)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(rag_sqlite PRIVATE -w)
+    elseif(MSVC)
+        target_compile_options(rag_sqlite PRIVATE /w)
+    endif()
+    set_target_properties(rag_sqlite PROPERTIES
+        C_STANDARD 99
+        C_EXTENSIONS ON
+        C_VISIBILITY_PRESET hidden
+        POSITION_INDEPENDENT_CODE ON)
+endif()
+
+find_library(RAG_MATH_LIBRARY m)
+
+# Adds SQLite and the system libraries to a target built from RAG_SOURCES.
+function(rag_link_dependencies target)
+    target_link_libraries(${target} PRIVATE ollama::ollama)
+    if(RAG_USE_SYSTEM_SQLITE)
+        target_link_libraries(${target} PRIVATE SQLite::SQLite3)
+    else()
+        target_sources(${target} PRIVATE $<TARGET_OBJECTS:rag_sqlite>)
+        target_include_directories(${target} SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite)
+        target_link_libraries(${target} PRIVATE Threads::Threads)
+    endif()
+    if(RAG_MATH_LIBRARY)
+        target_link_libraries(${target} PRIVATE m)
+    endif()
+endfunction()
+
+# ---- library ----
+
+set(RAG_SOURCES
+    src/ask.c
+    src/chunk.c
+    src/db.c
+    src/embed.c
+    src/fs.c
+    src/index.c
+    src/rag.c
+    src/search.c
+    src/sha256.c
+    src/utf8.c
+    src/util.c
+    src/vector.c)
+
+add_library(ollama_rag ${RAG_SOURCES})
+add_library(ollama::rag ALIAS ollama_rag)
+target_include_directories(ollama_rag PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+rag_link_dependencies(ollama_rag)
+target_compile_options(ollama_rag PRIVATE ${RAG_WARNINGS})
+set_target_properties(ollama_rag PROPERTIES
+    OUTPUT_NAME ollama-rag
+    EXPORT_NAME rag
+    C_STANDARD 99
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF
+    C_VISIBILITY_PRESET hidden
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+
+if(RAG_BUILD_CLI)
+    add_executable(ragc cli/ragc.c)
+    target_link_libraries(ragc PRIVATE ollama::rag)
+    target_compile_options(ragc PRIVATE ${RAG_WARNINGS})
+    set_target_properties(ragc PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+endif()
+
+# installed shared libraries find each other, and ragc finds them
+if(BUILD_SHARED_LIBS)
+    if(APPLE)
+        set(RAG_ORIGIN "@loader_path")
+    else()
+        set(RAG_ORIGIN "$ORIGIN")
+    endif()
+    set_target_properties(ollama_rag PROPERTIES INSTALL_RPATH "${RAG_ORIGIN}")
+    if(RAG_BUILD_CLI)
+        set_target_properties(ragc PROPERTIES INSTALL_RPATH "${RAG_ORIGIN}/../${CMAKE_INSTALL_LIBDIR}")
+    endif()
+endif()
+
+if(RAG_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
+if(RAG_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+# ---- installation ----
+
+if(RAG_INSTALL)
+    include(CMakePackageConfigHelpers)
+    set(RAG_DOCDIR ${CMAKE_INSTALL_DATAROOTDIR}/doc/${PROJECT_NAME})
+
+    install(TARGETS ollama_rag EXPORT ollama-rag-c-targets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(RAG_BUILD_CLI)
+        install(TARGETS ragc RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+    install(FILES include/ollama_rag.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES LICENSE README.md DESTINATION ${RAG_DOCDIR})
+    install(EXPORT ollama-rag-c-targets
+        NAMESPACE ollama::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ollama-rag-c)
+
+    if(RAG_USE_SYSTEM_SQLITE)
+        set(RAG_FIND_SQLITE "find_dependency(SQLite3)\n")
+        set(RAG_PC_SQLITE ", sqlite3")
+    else()
+        set(RAG_FIND_SQLITE "find_dependency(Threads)\n")
+        set(RAG_PC_SQLITE "")
+    endif()
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c-config.cmake
+        "include(CMakeFindDependencyMacro)\n"
+        "find_dependency(ollama-c 0.1)\n"
+        "${RAG_FIND_SQLITE}"
+        "include(\"\${CMAKE_CURRENT_LIST_DIR}/ollama-rag-c-targets.cmake\")\n")
+    write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c-config-version.cmake
+        COMPATIBILITY SameMinorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c-config-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ollama-rag-c)
+
+    # relative to the .pc file, so that the installation can be moved
+    if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+        set(RAG_PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
+    else()
+        file(RELATIVE_PATH RAG_PC_RELATIVE "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
+        set(RAG_PC_PREFIX "\${pcfiledir}/${RAG_PC_RELATIVE}")
+    endif()
+    # a static library needs its dependencies on the link line of its users
+    set(RAG_PC_LIBS "")
+    if(NOT RAG_USE_SYSTEM_SQLITE AND CMAKE_THREAD_LIBS_INIT)
+        string(APPEND RAG_PC_LIBS " ${CMAKE_THREAD_LIBS_INIT}")
+    endif()
+    if(RAG_MATH_LIBRARY)
+        string(APPEND RAG_PC_LIBS " -lm")
+    endif()
+    if(BUILD_SHARED_LIBS)
+        set(RAG_PC_REQUIRES "Requires.private")
+        set(RAG_PC_LIBS_PRIVATE "${RAG_PC_LIBS}")
+        set(RAG_PC_LIBS "")
+    else()
+        set(RAG_PC_REQUIRES "Requires")
+        set(RAG_PC_LIBS_PRIVATE "")
+    endif()
+    configure_file(ollama-rag-c.pc.in ${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c.pc @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ollama-rag-c.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+endif()
