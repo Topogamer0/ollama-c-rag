@@ -3,6 +3,12 @@ cmake_minimum_required(VERSION 3.14)
 if(POLICY CMP0092)
     cmake_policy(SET CMP0092 NEW)
 endif()
+# the behaviors that newer versions of CMake ask about: normalized install destinations and paths of DLLs
+foreach(policy CMP0177 CMP0207)
+    if(POLICY ${policy})
+        cmake_policy(SET ${policy} NEW)
+    endif()
+endforeach()
 
 project(ollama-rag-c
     VERSION 0.2.0
@@ -198,12 +204,23 @@ if(RAG_INSTALL)
             message(FATAL_ERROR "RAG_INSTALL_RUNTIME_DLLS needs CMake 3.21 or later, on Windows")
         endif()
         find_package(CURL REQUIRED) # where its DLLs are
-        install(TARGETS ragc
-            RUNTIME_DEPENDENCIES
-                DIRECTORIES $<TARGET_FILE_DIR:ragc> $<TARGET_FILE_DIR:CURL::libcurl>
-                PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
-                POST_EXCLUDE_REGEXES "[Ss][Yy][Ss][Tt][Ee][Mm]32"
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(TARGETS ragc RUNTIME_DEPENDENCY_SET rag_runtime RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        if(BUILD_SHARED_LIBS)
+            # the DLLs of the project are not searched for the DLLs they load (libcurl) unless they are in the set
+            set(RAG_DLL_TARGETS ollama_rag)
+            if(NOT RAG_USE_SYSTEM_OLLAMA_C)
+                list(APPEND RAG_DLL_TARGETS ollama)
+            endif()
+            install(TARGETS ${RAG_DLL_TARGETS}
+                RUNTIME_DEPENDENCY_SET rag_runtime
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        endif()
+        install(RUNTIME_DEPENDENCY_SET rag_runtime
+            DIRECTORIES $<TARGET_FILE_DIR:ragc> $<TARGET_FILE_DIR:CURL::libcurl>
+            PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+            POST_EXCLUDE_REGEXES "[Ss][Yy][Ss][Tt][Ee][Mm]32"
+            DESTINATION ${CMAKE_INSTALL_BINDIR})
         if(MSVC)
             # and the C runtime of the compiler, which Windows does not always have
             set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
