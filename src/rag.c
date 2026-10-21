@@ -343,7 +343,7 @@ rag_status_t rag_stats(rag_t *rag, rag_stats_t *stats) {
     if (st != RAG_OK) return st;
     if (!stats) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no stats");
     /* one snapshot, and what other handles may have changed */
-    db_counts_t c;
+    db_counts_t c = {0};
     char *model = NULL;
     st = rag_db_begin_read(rag);
     if (st == RAG_OK) st = rag_load_dimensions(rag);

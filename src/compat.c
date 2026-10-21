@@ -358,7 +358,7 @@ bool rag_os_stat(const char *path, bool follow, os_stat_t *st, os_error_t *oe) {
     }
     if (!follow) {
         /* only FindFirstFileW tells the kind of reparse point */
-        WIN32_FIND_DATAW fd;
+        WIN32_FIND_DATAW fd = {0};
         HANDLE h = has_wildcards(path) ? INVALID_HANDLE_VALUE : FindFirstFileW(w, &fd);
         if (h != INVALID_HANDLE_VALUE) {
             st->is_link = is_link_tag(fd.dwFileAttributes, fd.dwReserved0);
