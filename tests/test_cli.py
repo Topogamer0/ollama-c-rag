@@ -163,11 +163,17 @@ def main():
             r = ragc(*args, cwd=tmp)
             check(r.returncode == 2 and 'ragc --help' in r.stderr, f'empty argument {args}', r)
 
+        # values out of their range are invalid arguments too
+        for args in [('--batch-size', '65537', 'index', 'notes'), ('--chunk-size', '100', '--chunk-overlap', '100', 'stats'),
+                     ('index', '', 'notes'), ('remove', 'notes', ''), ('stats', '')]:
+            r = ragc(*args, cwd=tmp)
+            check(r.returncode == 2 and 'ragc --help' in r.stderr, f'invalid argument {args}', r)
+
         # a huge top-k returns everything
         r = ragc('-k', '1152921504606846977', 'search', 'bananas', cwd=tmp)
         check(r.returncode == 0 and '\n5. ' in r.stdout, 'huge top-k', r)
         r = ragc('--batch-size', '1152921504606846976', 'index', 'notes', cwd=tmp)
-        check(r.returncode == 1 and 'batch size' in r.stderr, 'huge batch size', r)
+        check(r.returncode == 2 and '--batch-size' in r.stderr, 'huge batch size', r)
 
         # an output that cannot be written is an error
         if os.path.exists('/dev/full'):
@@ -197,6 +203,9 @@ def main():
 
         # a file that cannot be indexed does not stop the others
         write(os.path.join(tmp, 'other.md'), 'Another note about carrots.')
+        r = ragc('index', 'nowhere', 'other.md', cwd=tmp)
+        check(r.returncode == 1 and 'nowhere' in r.stderr and '1 indexed' in r.stdout, 'index after a missing path', r)
+        r = ragc('remove', 'other.md', cwd=tmp)
         r = ragc('index', 'notes/image.txt', 'other.md', cwd=tmp)
         check(r.returncode == 1 and 'binary' in r.stderr and '1 indexed' in r.stdout and '1 skipped' in r.stdout,
               'index several files, one of them binary', r)

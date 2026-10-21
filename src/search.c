@@ -36,7 +36,7 @@ rag_status_t rag_find(rag_t *rag, const char *query, const rag_search_options_t 
     rag_results_t *results = calloc(1, sizeof(*results));
     if (!results) return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     /* another handle may have indexed, or removed, files since this one was opened */
-    rag_status_t st = rag_load_dimensions(rag);
+    rag_status_t st = rag_refresh(rag);
     if (st != RAG_OK || rag->stored_dimensions == 0) {
         /* nothing is indexed: no need to ask Ollama */
         if (st == RAG_OK)
@@ -60,7 +60,13 @@ rag_status_t rag_find(rag_t *rag, const char *query, const rag_search_options_t 
     /* one read transaction, so that the chunks found are still there when they are read */
     st = rag_db_begin_read(rag);
     bool reading = st == RAG_OK;
-    if (st == RAG_OK) st = rag_db_scan_vectors(rag, dims, visit, &s);
+    /* again, now that the index cannot change: it may have been emptied or rebuilt meanwhile */
+    if (st == RAG_OK) st = rag_refresh(rag);
+    if (st == RAG_OK && rag->stored_dimensions && rag->stored_dimensions != dims)
+        st = rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
+                         "the index '%s' was rebuilt with embeddings of %zu dimensions during the search: try again",
+                         rag->path, rag->stored_dimensions);
+    if (st == RAG_OK && rag->stored_dimensions) st = rag_db_scan_vectors(rag, dims, visit, &s);
     if (st == RAG_OK && s.best.failed) st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     free(q);
     rag_topk_sort(&s.best);

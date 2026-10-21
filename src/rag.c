@@ -170,33 +170,32 @@ static rag_status_t resolve_model(rag_t *rag, const rag_options_t *o, bool write
     return rag->embed_model ? RAG_OK : oom(rag);
 }
 
-static rag_status_t load_model(rag_t *rag, const rag_options_t *o) {
-    if (o->dimensions < 0)
-        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "invalid number of dimensions: %d", o->dimensions);
-    bool must_write = false;
-    rag_status_t st = resolve_model(rag, o, false, &must_write);
-    if (st == RAG_OK && must_write) {
-        /* again under the write lock, as another process may have stored embeddings meanwhile */
-        st = rag_db_begin(rag);
-        if (st == RAG_OK) st = resolve_model(rag, o, true, &must_write);
-        if (st == RAG_OK)
-            st = rag_db_commit(rag);
-        else
-            rag_db_rollback(rag);
+/* The requested size of the embeddings: the option, else the database's. */
+static rag_status_t load_requested_dimensions(rag_t *rag) {
+    if (rag->dimensions_option) {
+        rag->dimensions = rag->dimensions_option;
+        return RAG_OK;
     }
-    if (st == RAG_OK) st = rag_load_dimensions(rag);
     int64_t requested = 0;
-    bool requested_found = false;
-    if (st == RAG_OK) st = rag_db_get_meta_int(rag, "embed_dimensions", &requested, &requested_found);
-    if (st != RAG_OK) return st;
+    bool found = false;
+    rag_status_t st = rag_db_get_meta_int(rag, "embed_dimensions", &requested, &found);
+    rag->dimensions = st == RAG_OK && found && requested > 0 ? (int)requested : 0;
+    return st;
+}
 
-    rag->dimensions = o->dimensions ? o->dimensions : requested_found && requested > 0 ? (int)requested : 0;
-    if (o->dimensions > 0 && rag->stored_dimensions && (size_t)o->dimensions != rag->stored_dimensions)
-        return rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
-                           "the index '%s' stores embeddings of %zu dimensions, not %d: use the same size, or another "
-                           "database",
-                           rag->path, rag->stored_dimensions, o->dimensions);
-    return RAG_OK;
+rag_status_t rag_refresh(rag_t *rag) {
+    rag_status_t st = rag_load_dimensions(rag);
+    if (st == RAG_OK) st = load_requested_dimensions(rag);
+    if (st != RAG_OK || !rag->stored_dimensions) return st;
+    char *model = NULL;
+    st = stored(rag, "embed_model", &model);
+    if (st == RAG_OK && (!model || !rag_same_model(model, rag->embed_model)))
+        st = rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
+                         "the index '%s' now holds embeddings of the model '%s', not '%s': open it again, or use "
+                         "another database for the other model",
+                         rag->path, model ? model : "?", rag->embed_model);
+    free(model);
+    return st;
 }
 
 /* String setting: the option, else the stored value, else the default. */
@@ -213,19 +212,11 @@ static rag_status_t load_string(rag_t *rag, const char *option, const char *key,
     return st;
 }
 
-static rag_status_t load_settings(rag_t *rag, const rag_options_t *o) {
-    rag_status_t st = load_model(rag, o);
-    if (st != RAG_OK) return st;
-
-    const char *query, *document;
-    default_prefixes(rag->embed_model, &query, &document);
-    st = load_string(rag, o->query_prefix, "query_prefix", query, &rag->query_prefix);
-    if (st == RAG_OK) st = load_string(rag, o->document_prefix, "document_prefix", document, &rag->document_prefix);
-    if (st != RAG_OK) return st;
-
+/* Chunking settings: the options, else the database's, else the defaults. */
+static rag_status_t load_chunking(rag_t *rag, const rag_options_t *o) {
     int64_t size = 0, overlap = 0;
     bool size_found = false, overlap_found = false;
-    st = rag_db_get_meta_int(rag, "chunk_size", &size, &size_found);
+    rag_status_t st = rag_db_get_meta_int(rag, "chunk_size", &size, &size_found);
     if (st == RAG_OK) st = rag_db_get_meta_int(rag, "chunk_overlap", &overlap, &overlap_found);
     if (st != RAG_OK) return st;
     rag->chunk_size = o->chunk_size ? o->chunk_size : size_found && size > 0 ? (size_t)size : RAG_DEFAULT_CHUNK_SIZE;
@@ -244,10 +235,16 @@ static rag_status_t load_settings(rag_t *rag, const rag_options_t *o) {
         rag->chunk_overlap =
             RAG_DEFAULT_CHUNK_OVERLAP < rag->chunk_size / 4 ? RAG_DEFAULT_CHUNK_OVERLAP : rag->chunk_size / 4;
     }
+    return RAG_OK;
+}
 
-    if (o->batch_size > RAG_MAX_BATCH_SIZE)
-        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "the batch size (%zu) must be at most %d", o->batch_size,
-                           RAG_MAX_BATCH_SIZE);
+/* Everything is checked before the database is changed, so that a failure leaves it as it was. */
+static rag_status_t load_settings(rag_t *rag, const rag_options_t *o) {
+    bool must_write = false;
+    rag_status_t st = resolve_model(rag, o, false, &must_write);
+    if (st == RAG_OK) st = load_chunking(rag, o);
+    if (st != RAG_OK) return st;
+
     rag->batch_size = o->batch_size ? o->batch_size : RAG_DEFAULT_BATCH_SIZE;
     rag->chat_model = rag_strdup(o->chat_model && *o->chat_model ? o->chat_model : RAG_DEFAULT_CHAT_MODEL);
     rag->host = o->host && *o->host ? rag_strdup(o->host) : NULL;
@@ -255,6 +252,31 @@ static rag_status_t load_settings(rag_t *rag, const rag_options_t *o) {
     rag->timeout_ms = o->timeout_ms > 0 ? o->timeout_ms : 0;
     rag->progress = o->progress;
     rag->progress_data = o->progress_data;
+    rag->dimensions_option = o->dimensions;
+
+    if (must_write) {
+        /* again under the write lock, as another process may have stored embeddings meanwhile */
+        st = rag_db_begin(rag);
+        if (st == RAG_OK) st = resolve_model(rag, o, true, &must_write);
+        if (st == RAG_OK)
+            st = rag_db_commit(rag);
+        else
+            rag_db_rollback(rag);
+        if (st != RAG_OK) return st;
+    }
+
+    const char *query, *document;
+    default_prefixes(rag->embed_model, &query, &document);
+    st = load_string(rag, o->query_prefix, "query_prefix", query, &rag->query_prefix);
+    if (st == RAG_OK) st = load_string(rag, o->document_prefix, "document_prefix", document, &rag->document_prefix);
+    if (st == RAG_OK) st = rag_load_dimensions(rag);
+    if (st == RAG_OK) st = load_requested_dimensions(rag);
+    if (st != RAG_OK) return st;
+    if (o->dimensions > 0 && rag->stored_dimensions && (size_t)o->dimensions != rag->stored_dimensions)
+        return rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
+                           "the index '%s' stores embeddings of %zu dimensions, not %d: use the same size, or another "
+                           "database",
+                           rag->path, rag->stored_dimensions, o->dimensions);
     return RAG_OK;
 }
 
@@ -268,8 +290,20 @@ rag_status_t rag_open(const char *path, const rag_options_t *options, rag_t **ou
     rag->path = rag_strdup(path);
     if (!rag->path) return oom(rag);
 
-    rag_status_t st = rag_db_open(rag, path, (options ? options : &defaults)->must_exist);
-    if (st == RAG_OK) st = load_settings(rag, options ? options : &defaults);
+    /* checked before the database is opened, or created */
+    const rag_options_t *o = options ? options : &defaults;
+    if (o->dimensions < 0)
+        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "invalid number of dimensions: %d", o->dimensions);
+    if (o->batch_size > RAG_MAX_BATCH_SIZE)
+        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "the batch size (%zu) must be at most %d", o->batch_size,
+                           RAG_MAX_BATCH_SIZE);
+    if (o->chunk_size && o->chunk_overlap != RAG_NO_OVERLAP && o->chunk_overlap >= o->chunk_size)
+        return rag_err_set(&rag->err, RAG_ERROR_INVALID,
+                           "the chunk overlap (%zu) must be smaller than the chunk size (%zu)", o->chunk_overlap,
+                           o->chunk_size);
+
+    rag_status_t st = rag_db_open(rag, path, o->must_exist);
+    if (st == RAG_OK) st = load_settings(rag, o);
     if (st != RAG_OK) rag_db_close(rag);
     return st;
 }
@@ -284,6 +318,7 @@ void rag_close(rag_t *rag) {
     free(rag->query_prefix);
     free(rag->document_prefix);
     free(rag->chat_model);
+    free(rag->stats_model);
     rag_err_free(&rag->err);
     free(rag);
 }
@@ -307,13 +342,26 @@ rag_status_t rag_stats(rag_t *rag, rag_stats_t *stats) {
     rag_status_t st = rag_begin_call(rag);
     if (st != RAG_OK) return st;
     if (!stats) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no stats");
+    /* one snapshot, and what other handles may have changed */
     db_counts_t c;
-    st = rag_load_dimensions(rag); /* another handle may have changed it */
+    char *model = NULL;
+    st = rag_db_begin_read(rag);
+    if (st == RAG_OK) st = rag_load_dimensions(rag);
     if (st == RAG_OK) st = rag_db_counts(rag, &c);
-    if (st != RAG_OK) return st;
+    if (st == RAG_OK) st = stored(rag, "embed_model", &model);
+    if (st == RAG_OK)
+        st = rag_db_commit(rag);
+    else
+        rag_db_rollback(rag);
+    if (st != RAG_OK) {
+        free(model);
+        return st;
+    }
+    free(rag->stats_model);
+    rag->stats_model = model;
     *stats = (rag_stats_t){
         .path = rag->path,
-        .embed_model = rag->embed_model,
+        .embed_model = model ? model : rag->embed_model,
         .dimensions = rag->stored_dimensions,
         .chunk_size = rag->chunk_size,
         .chunk_overlap = rag->chunk_overlap,
@@ -327,6 +375,35 @@ rag_status_t rag_stats(rag_t *rag, rag_stats_t *stats) {
 }
 
 /* ---- removal ---- */
+
+#define REMOVE_GROUP 256
+
+rag_status_t rag_remove_listed(rag_t *rag, const db_file_t *const *files, size_t count, rag_index_stats_t *stats,
+                               size_t done, size_t total) {
+    rag_status_t st = RAG_OK, stop = RAG_OK;
+    for (size_t first = 0; st == RAG_OK && first < count; first += REMOVE_GROUP) {
+        size_t n = count - first < REMOVE_GROUP ? count - first : REMOVE_GROUP;
+        size_t chunks[REMOVE_GROUP];
+        bool deleted[REMOVE_GROUP];
+        st = rag_db_begin(rag);
+        for (size_t i = 0; st == RAG_OK && i < n; i++)
+            st = rag_db_delete_file(rag, files[first + i]->id, files[first + i]->path, &chunks[i], &deleted[i]);
+        if (st == RAG_OK)
+            st = rag_db_commit(rag);
+        else
+            rag_db_rollback(rag);
+        /* every file of a committed group is counted, but none is reported after the callback asked to stop */
+        for (size_t i = 0; st == RAG_OK && i < n; i++) {
+            if (!deleted[i]) continue;
+            stats->files_removed++;
+            stats->chunks_removed += chunks[i];
+            if (stop == RAG_OK)
+                stop = rag_report(rag, RAG_FILE_REMOVED, files[first + i]->path, chunks[i], NULL, done, total);
+        }
+        if (st == RAG_OK) st = stop;
+    }
+    return st;
+}
 
 rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *stats) {
     rag_index_stats_t local;
@@ -343,21 +420,13 @@ rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *st
     free(canonical);
     if (st == RAG_OK && files.count == 0)
         st = rag_err_set(&rag->err, RAG_ERROR_NOT_FOUND, "'%s' is not in the index", path);
-    /* a transaction per file: what has been reported stays removed if the callback stops */
-    for (size_t i = 0; st == RAG_OK && i < files.count; i++) {
-        size_t chunks = 0;
-        st = rag_db_begin(rag);
-        if (st == RAG_OK) st = rag_db_delete_file(rag, files.items[i].id, &chunks);
-        if (st == RAG_OK)
-            st = rag_db_commit(rag);
-        else
-            rag_db_rollback(rag);
-        if (st == RAG_OK) {
-            stats->files_removed++;
-            stats->chunks_removed += chunks;
-            st = rag_report(rag, RAG_FILE_REMOVED, files.items[i].path, chunks, NULL, 0, 0);
-        }
+    const db_file_t **list = st == RAG_OK ? malloc(files.count * sizeof(*list)) : NULL;
+    if (st == RAG_OK && !list) st = oom(rag);
+    if (st == RAG_OK) {
+        for (size_t i = 0; i < files.count; i++) list[i] = &files.items[i];
+        st = rag_remove_listed(rag, list, files.count, stats, 0, 0);
     }
+    free(list);
     rag_db_file_list_free(&files);
     return st;
 }

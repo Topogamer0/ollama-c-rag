@@ -15,7 +15,7 @@ indexed  notes/trips/holidays.md (1 chunk)
 indexed  notes/work.md (1 chunk)
 3 indexed, 0 unchanged, 0 removed, 0 skipped (3 chunks added)
 
-$ ragc ask "When do we go to Sicily?"
+$ ragc -k 2 ask "When do we go to Sicily?"
 In August, for a week: first Palermo, then the beaches near Cefalù [1].
 
 Sources:
@@ -27,7 +27,8 @@ Sources:
 
 - **Indexing** of text files and of whole directories, recursively. Chunks of about 800 characters
   (configurable) that overlap by 100, cut between paragraphs when possible, then after sentences, at
-  line breaks or between words. Markdown headings start a new chunk.
+  line breaks or between words. Markdown headings are preferred places to cut, and a chunk never
+  ends with one.
 - **Embeddings** computed by Ollama in batches that span files, normalized and stored in SQLite as
   float32 BLOBs, with the text of each chunk, its file and its position (byte offsets and lines).
 - **Incremental**: the index keeps a SHA-256 of every file, so only new and modified files are
@@ -45,7 +46,9 @@ Sources:
 
 ## Building
 
-Requirements: a C99 compiler, CMake 3.14 or later, git (CMake downloads Ollama-C v0.1.0), and
+Requirements: a C99 compiler, CMake 3.14 or later (3.20 for the `ctest --test-dir` and
+`cmake --install` commands below; with older versions run `ctest` and `make install` in `build`), git
+(CMake downloads Ollama-C v0.1.0), and
 libcurl with its development headers (`libcurl4-openssl-dev` on Debian/Ubuntu, `libcurl-devel` on
 Fedora; it comes with macOS). The tests also need Python 3.
 
@@ -160,7 +163,7 @@ shown relative to it. The exit status is 0 on success, 1 on errors and 2 for
 invalid arguments.
 
 ```console
-$ ragc search ferry to Sicily
+$ ragc -k 2 search ferry to Sicily
 1. notes/trips/holidays.md:1-5  (score 0.354)
    # Holidays
 
@@ -172,10 +175,10 @@ $ ragc search ferry to Sicily
    Shopping list: bread, olive oil, tomatoes, basil.
 
 $ ragc stats
-database         ragc.db (32.0 KB)
+database         ragc.db (128.0 KB)
 embedding model  embeddinggemma (768 dimensions)
 files            3
-chunks           3 (265 bytes of text)
+chunks           3 (266 bytes of text)
 chunking         800 characters, 100 shared
 last indexed     2026-10-21 11:03:50
 

@@ -190,9 +190,22 @@ static rag_status_t flush(indexer_t *ix) {
         ix->head = j->next;
         if (!ix->head) ix->tail = NULL;
         if (j->lost) {
-            /* the version of the other handle is the one kept */
-            ix->stats->files_unchanged++;
-            if (st == RAG_OK) st = rag_report(rag, RAG_FILE_UNCHANGED, j->path, 0, NULL, ix->examined, ix->total);
+            /* another handle took the file over: did it index it, or remove it? */
+            db_file_t now;
+            bool found = false;
+            rag_status_t check = rag_db_find_file(rag, j->path, &now, &found);
+            bool indexed = check == RAG_OK && found && now.hash[0] != '~';
+            if (found) rag_db_file_release(&now);
+            if (check != RAG_OK && st == RAG_OK) st = check;
+            if (indexed) {
+                ix->stats->files_unchanged++;
+                if (st == RAG_OK) st = rag_report(rag, RAG_FILE_UNCHANGED, j->path, 0, NULL, ix->examined, ix->total);
+            } else {
+                ix->stats->files_failed++;
+                if (st == RAG_OK)
+                    st = rag_report(rag, RAG_FILE_FAILED, j->path, 0, "changed by another handle while it was indexed",
+                                    ix->examined, ix->total);
+            }
         } else {
             ix->stats->files_indexed++;
             ix->stats->chunks_added += j->chunks.count;
@@ -324,7 +337,9 @@ static rag_status_t remove_deleted(indexer_t *ix, const char *dir, const fs_list
     rag_t *rag = ix->rag;
     db_file_list_t files = {0};
     rag_status_t st = rag_db_files_under(rag, dir, &files);
-    size_t k = 0;
+    const db_file_t **gone = st == RAG_OK && files.count ? malloc(files.count * sizeof(*gone)) : NULL;
+    if (st == RAG_OK && files.count && !gone) st = oom(rag);
+    size_t count = 0, k = 0;
     for (size_t i = 0; st == RAG_OK && i < files.count; i++) {
         const db_file_t *f = &files.items[i];
         /* both lists are sorted by path */
@@ -336,22 +351,10 @@ static rag_status_t remove_deleted(indexer_t *ix, const char *dir, const fs_list
         fs_info_t info;
         rag_status_t exists = rag_fs_stat(f->path, &info, &e);
         rag_err_free(&e);
-        if (exists == RAG_OK ? info.is_file : exists != RAG_ERROR_NOT_FOUND) continue;
-
-        /* a transaction per file: what has been reported stays removed if the callback stops */
-        size_t chunks = 0;
-        st = rag_db_begin(rag);
-        if (st == RAG_OK) st = rag_db_delete_file(rag, f->id, &chunks);
-        if (st == RAG_OK)
-            st = rag_db_commit(rag);
-        else
-            rag_db_rollback(rag);
-        if (st == RAG_OK) {
-            ix->stats->files_removed++;
-            ix->stats->chunks_removed += chunks;
-            st = rag_report(rag, RAG_FILE_REMOVED, f->path, chunks, NULL, ix->examined, ix->total);
-        }
+        if (exists == RAG_OK ? !info.is_file : exists == RAG_ERROR_NOT_FOUND) gone[count++] = f;
     }
+    if (st == RAG_OK) st = rag_remove_listed(rag, gone, count, ix->stats, ix->examined, ix->total);
+    free(gone);
     rag_db_file_list_free(&files);
     return st;
 }
@@ -364,6 +367,8 @@ rag_status_t rag_add_file(rag_t *rag, const char *path, rag_index_stats_t *stats
     if (st != RAG_OK) return st;
     if (!path || !*path) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no path");
 
+    st = rag_refresh(rag); /* another handle may have changed the index */
+    if (st != RAG_OK) return st;
     char *canonical = rag_fs_canonical(path, &rag->err);
     if (!canonical) return rag->err.pub.code;
     indexer_t ix;
@@ -385,6 +390,8 @@ rag_status_t rag_add_dir(rag_t *rag, const char *path, rag_index_stats_t *stats)
     if (st != RAG_OK) return st;
     if (!path || !*path) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no path");
 
+    st = rag_refresh(rag); /* another handle may have changed the index */
+    if (st != RAG_OK) return st;
     char *dir = rag_fs_canonical(path, &rag->err);
     if (!dir) return rag->err.pub.code;
     fs_list_t list = {0};

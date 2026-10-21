@@ -761,6 +761,149 @@ static void test_large_values(void) {
     rag_close(open_index("main.db", (rag_options_t){.batch_size = RAG_MAX_BATCH_SIZE}));
 }
 
+static void test_stale_handle(void) {
+    /* opened on an empty index, which another handle then fills with another model */
+    rag_t *old = open_index("stale.db", (rag_options_t){.embed_model = "model-a"});
+    rag_t *other = open_index("stale.db", (rag_options_t){.embed_model = "model-b"});
+    CHECK(rag_add_file(other, path_of(docs, "fruit.md"), NULL) == RAG_OK);
+    rag_results_t *r = NULL;
+    CHECK(rag_search(old, "bananas", NULL, &r) == RAG_ERROR_MODEL_MISMATCH);
+    CHECK(strstr(rag_last_error(old)->message, "model-b") != NULL);
+    CHECK(rag_add_file(old, path_of(docs, "code.txt"), NULL) == RAG_ERROR_MODEL_MISMATCH);
+    rag_stats_t info;
+    CHECK(rag_stats(old, &info) == RAG_OK);
+    CHECK_STR(info.embed_model, "model-b");
+    rag_close(old);
+    rag_close(other);
+
+    /* another handle chose the size of the embeddings: this one follows */
+    old = open_index("stale-size.db", (rag_options_t){0});
+    other = open_index("stale-size.db", (rag_options_t){.dimensions = 64});
+    CHECK(rag_add_file(other, path_of(docs, "fruit.md"), NULL) == RAG_OK);
+    rag_status_t st = rag_search(old, "bananas", NULL, &r);
+    if (st != RAG_OK) fprintf(stderr, "  %s\n", rag_last_error(old)->message);
+    CHECK(st == RAG_OK);
+    CHECK(r && r->count == 1);
+    rag_results_free(r);
+    CHECK(rag_add_file(old, path_of(docs, "code.txt"), NULL) == RAG_OK);
+    rag_close(old);
+    rag_close(other);
+}
+
+typedef struct reuse {
+    rag_t *other;
+    const char *victim;
+    const char *outsider;
+    int calls;
+} reuse_t;
+
+/* Between two groups of removals, the other handle frees the highest id and indexes another file. */
+static int reuse_id(const rag_progress_t *p, void *data) {
+    reuse_t *r = data;
+    if (p->event == RAG_FILE_REMOVED && r->calls++ == 0) {
+        CHECK(rag_remove_file(r->other, r->victim, NULL) == RAG_OK);
+        CHECK(rag_add_file(r->other, r->outsider, NULL) == RAG_OK);
+    }
+    return 0;
+}
+
+static void test_removal_with_reused_ids(void) {
+    char *dir = dup_string(path_of(tmp, "many"));
+    char name[32];
+    for (int i = 0; i < 300; i++) {
+        snprintf(name, sizeof(name), "f%03d.txt", i);
+        write_file(path_of(dir, name), "A small note.");
+    }
+    char *outsider = dup_string(path_of(tmp, "outsider.txt"));
+    write_file(outsider, "Not in the directory.");
+    rag_t *rag = open_index("many.db", (rag_options_t){0});
+    CHECK(rag_add_dir(rag, dir, NULL) == RAG_OK);
+    rag_close(rag);
+
+    reuse_t r = {open_index("many.db", (rag_options_t){0}), NULL, outsider, 0};
+    r.victim = path_of(dir, "f299.txt");
+    rag = open_index("many.db", (rag_options_t){.progress = reuse_id, .progress_data = &r});
+    rag_index_stats_t stats;
+    CHECK(rag_remove_file(rag, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_removed, 299);
+    /* the file that took the id of f299.txt is still there */
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 1);
+    rag_results_t *found = NULL;
+    CHECK(rag_search(rag, "directory", NULL, &found) == RAG_OK);
+    CHECK(found && found->count == 1 && strcmp(found->items[0].path, outsider) == 0);
+    rag_results_free(found);
+    rag_close(rag);
+    rag_close(r.other);
+    free(outsider);
+    free(dir);
+}
+
+typedef struct vanish {
+    rag_t *other;
+    const char *file;
+    int calls;
+    int failed;
+} vanish_t;
+
+/* While the first handle is between two batches, the other one removes the file being written. */
+static int remove_meanwhile(const rag_progress_t *p, void *data) {
+    vanish_t *v = data;
+    if (p->event == RAG_FILE_INDEXED && v->calls++ == 0) CHECK(rag_remove_file(v->other, v->file, NULL) == RAG_OK);
+    if (p->event == RAG_FILE_FAILED) v->failed++;
+    return 0;
+}
+
+static void test_file_removed_while_indexed(void) {
+    char *dir = dup_string(path_of(tmp, "vanish"));
+    write_file(path_of(dir, "a.txt"), "Alpha.");
+    string_t text = {0};
+    for (int i = 0; i < 12; i++) string_append(&text, "A sentence of the long file. ");
+    write_file(path_of(dir, "f.txt"), text.data);
+    free(text.data);
+
+    vanish_t v = {open_index("vanish.db", (rag_options_t){.chunk_size = 40}), NULL, 0, 0};
+    v.file = path_of(dir, "f.txt");
+    rag_t *rag = open_index(
+        "vanish.db",
+        (rag_options_t){.chunk_size = 40, .batch_size = 2, .progress = remove_meanwhile, .progress_data = &v});
+    rag_index_stats_t stats;
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    CHECK_SIZE(stats.files_failed, 1);
+    CHECK(v.failed == 1);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 1);
+    CHECK_SIZE(info.chunks, 1);
+    rag_close(rag);
+    rag_close(v.other);
+    free(dir);
+}
+
+static void test_open_fails_without_changes(void) {
+    rag_t *rag = open_index("unchanged.db", (rag_options_t){.embed_model = "model-a"});
+    rag_close(rag);
+    rag = NULL;
+    rag_options_t bad = {.embed_model = "model-b", .batch_size = RAG_MAX_BATCH_SIZE + 1};
+    CHECK(rag_open(path_of(tmp, "unchanged.db"), &bad, &rag) == RAG_ERROR_INVALID);
+    rag_close(rag);
+    rag_options_t bad_overlap = {.embed_model = "model-b", .chunk_size = 100, .chunk_overlap = 100};
+    CHECK(rag_open(path_of(tmp, "unchanged.db"), &bad_overlap, &rag) == RAG_ERROR_INVALID);
+    rag_close(rag);
+    /* without a model option, the stored one is used: still model-a */
+    CHECK(rag_open(path_of(tmp, "unchanged.db"), NULL, &rag) == RAG_OK);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_STR(info.embed_model, "model-a");
+    rag_close(rag);
+
+    CHECK(rag_open(path_of(tmp, "never.db"), &bad, &rag) == RAG_ERROR_INVALID);
+    rag_close(rag);
+    CHECK(!file_exists(path_of(tmp, "never.db")));
+}
+
 static void test_empty_index(void) {
     rag_t *rag = open_index("empty.db", (rag_options_t){0});
     rag_results_t *r = NULL;
@@ -792,6 +935,10 @@ int main(void) {
     RUN(test_progress_order);
     RUN(test_stop_in_batch);
     RUN(test_large_values);
+    RUN(test_stale_handle);
+    RUN(test_removal_with_reused_ids);
+    RUN(test_file_removed_while_indexed);
+    RUN(test_open_fails_without_changes);
     RUN(test_empty_index);
 
     remove_tree(tmp);

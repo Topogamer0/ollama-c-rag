@@ -157,11 +157,13 @@ struct rag {
     long timeout_ms;
     char *embed_model;
     int dimensions;           /* requested size of the embeddings, 0: the model's */
+    int dimensions_option;    /* the size given to rag_open(), 0 if none */
     size_t stored_dimensions; /* size of the stored embeddings, 0 if there are none */
     char *query_prefix;
     char *document_prefix;
     size_t batch_size;
     char *chat_model;
+    char *stats_model; /* the model reported by rag_stats() */
     size_t chunk_size;
     size_t chunk_overlap;
     rag_progress_fn progress;
@@ -172,6 +174,13 @@ struct rag {
 
 /* Reads the size of the stored embeddings into rag->stored_dimensions: 0 if none is stored. */
 rag_status_t rag_load_dimensions(rag_t *rag);
+
+/*
+ * Reads again what other handles may have changed since this one was opened:
+ * the size of the stored embeddings and the requested size (unless given to
+ * rag_open). Fails if the embeddings stored are of another model.
+ */
+rag_status_t rag_refresh(rag_t *rag);
 
 /* Starts a public call: checks the handle and clears the last error. */
 rag_status_t rag_begin_call(rag_t *rag);
@@ -210,6 +219,14 @@ typedef struct db_file_list {
 void rag_db_file_release(db_file_t *f);
 void rag_db_file_list_free(db_file_list_t *list);
 
+/*
+ * Removes files listed earlier, by groups in a transaction each, counting them
+ * in `stats` and reporting them after each commit. Files that other handles
+ * removed or replaced meanwhile are skipped.
+ */
+rag_status_t rag_remove_listed(rag_t *rag, const db_file_t *const *files, size_t count, rag_index_stats_t *stats,
+                               size_t done, size_t total);
+
 /* Opens or creates the database, checks or creates the schema. */
 rag_status_t rag_db_open(rag_t *rag, const char *path, bool must_exist);
 void rag_db_close(rag_t *rag);
@@ -239,8 +256,11 @@ rag_status_t rag_db_file_hash_is(rag_t *rag, int64_t id, const char *hash, bool 
 void rag_db_pending_hash(char out[34]);
 /* Sets the hash of a file, once all its chunks are stored. */
 rag_status_t rag_db_set_file_hash(rag_t *rag, int64_t id, const char *hash);
-/* Deletes a file with its chunks; *chunks is the number of chunks deleted. */
-rag_status_t rag_db_delete_file(rag_t *rag, int64_t id, size_t *chunks);
+/*
+ * Deletes a file with its chunks, if `id` is still the file `path`; *deleted
+ * tells whether it was, *chunks is the number of chunks deleted.
+ */
+rag_status_t rag_db_delete_file(rag_t *rag, int64_t id, const char *path, size_t *chunks, bool *deleted);
 /* Adds a chunk and its embedding (`dims` floats, normalized) to a file. */
 rag_status_t rag_db_add_chunk(rag_t *rag, int64_t file_id, size_t seq, const chunk_span_t *span, const char *text,
                               size_t text_len, const float *embedding, size_t dims);

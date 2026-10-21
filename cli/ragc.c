@@ -14,6 +14,9 @@
 
 #define DEFAULT_DB "ragc.db"
 
+#define STRING(x) #x
+#define NUMBER(x) STRING(x)
+
 static const char USAGE[] =
     "usage: ragc [options] <command> [arguments]\n"
     "\n"
@@ -238,8 +241,9 @@ static int apply_option(cli_t *c, int id, const char *value, const char *name) {
         c->options.chunk_overlap = n ? n : RAG_NO_OVERLAP;
         break;
     case OPT_BATCH_SIZE:
-        if (!parse_size(value, &c->options.batch_size) || c->options.batch_size == 0)
-            return usage_error("invalid number for %s", name);
+        if (!parse_size(value, &c->options.batch_size) || c->options.batch_size == 0 ||
+            c->options.batch_size > RAG_MAX_BATCH_SIZE)
+            return usage_error("%s must be a number from 1 to " NUMBER(RAG_MAX_BATCH_SIZE), name);
         break;
     case OPT_DIMENSIONS:
         if (!parse_size(value, &n) || n == 0 || n > 1000000) return usage_error("invalid number for %s", name);
@@ -339,8 +343,8 @@ static int cmd_index(cli_t *c, rag_t *rag) {
         total.chunks_added += s.chunks_added;
         if (rc != RAG_OK) {
             print_error(c, rag);
-            /* a file that cannot be read only concerns itself: go on with the others */
-            if (dir || s.files_failed == 0) return 1;
+            /* a path that cannot be read only concerns itself: go on with the others */
+            if (rc != RAG_ERROR_IO && rc != RAG_ERROR_NOT_FOUND && rc != RAG_ERROR_INVALID) return 1;
             code = 1;
         }
     }
@@ -476,10 +480,23 @@ static int run(int argc, char **argv) {
         free(args);
         return code;
     }
-    bool blank = true; /* only empty strings: as if there were no arguments */
-    for (int i = 0; i < c.nargs; i++)
-        if (c.args[i][0]) blank = false;
-    if (blank) c.nargs = 0;
+    if (COMMANDS[k].takes_args) {
+        /* a question of empty words is no question, and an empty path is no path */
+        bool blank = true, empty = false;
+        for (int i = 0; i < c.nargs; i++) {
+            if (c.args[i][0])
+                blank = false;
+            else
+                empty = true;
+        }
+        bool paths = COMMANDS[k].run == cmd_index || COMMANDS[k].run == cmd_remove;
+        if (blank || (paths && empty)) c.nargs = 0;
+    }
+    if (c.options.chunk_size && c.options.chunk_overlap != RAG_NO_OVERLAP &&
+        c.options.chunk_overlap >= c.options.chunk_size) {
+        free(args);
+        return usage_error("%s", "--chunk-overlap must be smaller than --chunk-size");
+    }
     if (COMMANDS[k].takes_args != (c.nargs > 0)) {
         fprintf(stderr, "ragc: %s: %s\n", c.command,
                 COMMANDS[k].takes_args ? COMMANDS[k].missing : "no arguments expected");

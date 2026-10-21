@@ -279,18 +279,20 @@ static void test_remove(void) {
     add_fake_file(rag, c, 1, 4);
     add_fake_file(rag, d, 1, 4);
 
-    /* a callback can stop the removal: the files reported are removed, the others are not */
+    /* a callback can stop the reports, but the files of the group already removed are counted */
     removed.stop_at = 1;
     rag_index_stats_t stats;
     CHECK(rag_remove_file(rag, docs, &stats) == RAG_ERROR_ABORTED);
-    CHECK_SIZE(stats.files_removed, 1);
-    CHECK_SIZE(stats.chunks_removed, 2);
+    CHECK(removed.count == 1);
     CHECK_STR(removed.last, a);
+    CHECK_SIZE(stats.files_removed, 2);
+    CHECK_SIZE(stats.chunks_removed, 5);
     db_counts_t counts;
     CHECK(rag_db_counts(rag, &counts) == RAG_OK);
-    CHECK_SIZE(counts.files, 3);
-    CHECK_SIZE(counts.vectors, 5);
+    CHECK_SIZE(counts.files, 2);
+    CHECK_SIZE(counts.vectors, 2);
     add_fake_file(rag, a, 2, 4);
+    add_fake_file(rag, b, 3, 4);
 
     /* a directory removes everything below it, and only that */
     removed.count = 0;

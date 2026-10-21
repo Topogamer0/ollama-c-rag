@@ -198,10 +198,11 @@ RAG_API rag_status_t rag_add_dir(rag_t *rag, const char *path, rag_index_stats_t
 
 /*
  * Removes a file from the index, or all the indexed files below a directory.
- * The file does not need to exist anymore. Every file is removed in its own
- * transaction, then reported: if the progress callback stops the call, the
- * files reported so far stay removed. Fails with RAG_ERROR_NOT_FOUND if
- * nothing is indexed under `path`. `stats` can be NULL.
+ * The file does not need to exist anymore. Files are removed by groups, each
+ * in a transaction of its own, then reported: if the progress callback stops
+ * the call, the files removed so far stay removed (and counted in `stats`).
+ * Fails with RAG_ERROR_NOT_FOUND if nothing is indexed under `path`. `stats`
+ * can be NULL.
  */
 RAG_API rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *stats);
 
@@ -296,7 +297,7 @@ typedef struct rag_stats {
     int64_t last_indexed;    /* time of the last indexing (Unix time), 0 if never */
 } rag_stats_t;
 
-/* Fills `stats`; its strings belong to the handle and are valid until rag_close(). */
+/* Fills `stats`; its strings belong to the handle and are valid until the next rag_stats() or rag_close(). */
 RAG_API rag_status_t rag_stats(rag_t *rag, rag_stats_t *stats);
 
 #ifdef __cplusplus

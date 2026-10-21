@@ -434,9 +434,25 @@ rag_status_t rag_db_set_file_hash(rag_t *rag, int64_t id, const char *hash) {
     return st;
 }
 
-rag_status_t rag_db_delete_file(rag_t *rag, int64_t id, size_t *chunks) {
+rag_status_t rag_db_delete_file(rag_t *rag, int64_t id, const char *path, size_t *chunks, bool *deleted) {
+    *chunks = 0;
+    *deleted = false;
+    /* the id may have been given to another file since it was read */
     sqlite3_stmt *stmt;
-    rag_status_t st = prepare(rag, "SELECT count(*) FROM chunks WHERE file_id = ?1", &stmt);
+    rag_status_t st = prepare(rag, "SELECT count(*) FROM files WHERE id = ?1 AND path = ?2", &stmt);
+    if (st != RAG_OK) return st;
+    sqlite3_bind_int64(stmt, 1, id);
+    bind_text(stmt, 2, path);
+    bool same = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+        same = sqlite3_column_int64(stmt, 0) > 0;
+    else
+        st = db_error(rag);
+    sqlite3_finalize(stmt);
+    if (st != RAG_OK || !same) return st;
+    *deleted = true;
+
+    st = prepare(rag, "SELECT count(*) FROM chunks WHERE file_id = ?1", &stmt);
     if (st != RAG_OK) return st;
     sqlite3_bind_int64(stmt, 1, id);
     if (sqlite3_step(stmt) == SQLITE_ROW)
