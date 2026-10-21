@@ -27,7 +27,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         list(APPEND RAG_WARNINGS -Werror)
     endif()
 elseif(MSVC)
-    set(RAG_WARNINGS /W4)
+    # C4204, C4221: aggregate initializers that C99 allows, and the default dialect of MSVC calls extensions
+    set(RAG_WARNINGS /W4 /wd4204 /wd4221)
     if(RAG_WERROR)
         list(APPEND RAG_WARNINGS /WX)
     endif()
@@ -187,17 +188,27 @@ if(RAG_INSTALL)
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    if(RAG_BUILD_CLI)
-        install(TARGETS ragc RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-        if(WIN32 AND RAG_INSTALL_RUNTIME_DLLS)
-            # a ragc.exe that runs on its own: libcurl and its dependencies, and the C runtime of the compiler
-            if(CMAKE_VERSION VERSION_LESS 3.21)
-                message(FATAL_ERROR "RAG_INSTALL_RUNTIME_DLLS needs CMake 3.21 or later")
-            endif()
-            install(FILES $<TARGET_RUNTIME_DLLS:ragc> DESTINATION ${CMAKE_INSTALL_BINDIR})
-            set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
-            include(InstallRequiredSystemLibraries)
+    if(RAG_BUILD_CLI AND WIN32 AND RAG_INSTALL_RUNTIME_DLLS)
+        # a ragc.exe that runs on its own: the DLLs it loads (libcurl, zlib, ...), but the system's
+        if(CMAKE_VERSION VERSION_LESS 3.21 OR CMAKE_CROSSCOMPILING)
+            message(FATAL_ERROR "RAG_INSTALL_RUNTIME_DLLS needs CMake 3.21 or later, on Windows")
         endif()
+        find_package(CURL REQUIRED) # where its DLLs are
+        install(TARGETS ragc
+            RUNTIME_DEPENDENCIES
+                DIRECTORIES $<TARGET_FILE_DIR:ragc> $<TARGET_FILE_DIR:CURL::libcurl>
+                PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+                POST_EXCLUDE_REGEXES "[Ss][Yy][Ss][Tt][Ee][Mm]32"
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        if(MSVC)
+            # and the C runtime of the compiler, which Windows does not always have
+            set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+            include(InstallRequiredSystemLibraries)
+            list(FILTER CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS INCLUDE REGEX "vcruntime[^/]*\\.dll$")
+            install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION ${CMAKE_INSTALL_BINDIR})
+        endif()
+    elseif(RAG_BUILD_CLI)
+        install(TARGETS ragc RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     endif()
     install(FILES include/ollama_rag.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
     install(FILES LICENSE README.md DESTINATION ${RAG_DOCDIR})
