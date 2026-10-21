@@ -912,7 +912,8 @@ static void test_open_fails_without_changes(void) {
 
 /*
  * A file renamed in another case is still there under its old name where
- * names do not depend on case (Windows): it is removed all the same.
+ * names do not depend on case (Windows, and macOS usually): it is removed
+ * all the same.
  */
 static void test_renamed_in_case(void) {
     char *dir = dup_string(path_of(tmp, "case"));

@@ -64,8 +64,13 @@ static char *resolved(const char *real, const char *rest) {
     if (n > 0 && rag_os_is_sep(real[n - 1])) n--; /* "/" or "C:\" */
     char *path = rag_format("%.*s%s", (int)n, real, rest);
     if (!path) return NULL;
-#ifdef _WIN32
-    /* names do not depend on case: spell the file as on the disk, so that it has one path only */
+#ifndef _WIN32
+    normalize(path);
+#endif
+    /*
+     * where names do not depend on case (Windows, and macOS usually), spell
+     * the file as on the disk, so that it has one path only
+     */
     char *name = rag_os_disk_name(path);
     if (name) {
         const char *last = path + strlen(path);
@@ -77,9 +82,6 @@ static char *resolved(const char *real, const char *rest) {
             path = fixed;
         }
     }
-#else
-    normalize(path);
-#endif
     return path;
 }
 

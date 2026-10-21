@@ -285,8 +285,8 @@ contain NUL bytes are considered binary and skipped (UTF-16 files are reported a
 embeddings and the chunking settings), `files` (path, SHA-256 of the content, settings used),
 `chunks` (text, byte offsets, first and last line) and `vectors` (one normalized float32 BLOB per
 chunk, in a table of its own so that searches only read vectors). Paths are stored absolute, with
-the links of their directories resolved; on Windows with `\` separators and the names spelled as
-on the disk, since names there do not depend on case.
+the links of their directories resolved and, where names do not depend on case (Windows, and macOS
+usually), the names spelled as on the disk; on Windows with `\` separators.
 
 **Incremental indexing.** A file is processed again when its hash or the settings it was indexed
 with (chunk size, overlap, embedding size, document prefix) change. Embeddings are requested in

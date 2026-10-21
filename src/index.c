@@ -357,8 +357,9 @@ static rag_status_t remove_deleted(indexer_t *ix, const char *dir, const fs_list
         bool renamed = false;
         if (exists == RAG_OK && info.is_file) {
             /*
-             * Still there, by another path: renamed with another case on Windows
-             * (names do not depend on case), or below a directory that became a link.
+             * Still there, by another path: renamed with another case where names
+             * do not depend on case (Windows, and macOS usually), or below a
+             * directory that became a link.
              */
             char *now = rag_fs_canonical(f->path, &e);
             renamed = now && strcmp(now, f->path) != 0;

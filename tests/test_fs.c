@@ -95,14 +95,20 @@ static void test_canonical(void) {
         check_canonical("dirlink/b.md", path_of(tmp, "sub/b.md"));
         check_canonical("dirlink/new.md", path_of(tmp, "sub/new.md"));
     }
+    /* names spelled as on the disk, where they do not depend on case (Windows, and macOS usually) */
+    if (file_exists(path_of(tmp, "A.MD"))) {
+        check_canonical("SUB/B.MD", path_of(tmp, "sub/b.md"));
+        check_canonical("Sub", path_of(tmp, "sub"));
+        check_canonical("WITH SPACE/CITTÀ È.MD", path_of(tmp, "with space/città è.md"));
+        check_canonical("SUB/New.md", path_of(tmp, "sub/New.md")); /* a file that does not exist keeps its name */
+    } else {
+        printf("  (names depend on case here: their spelling is not tested)\n");
+    }
 #ifdef _WIN32
-    /* both separators, and names spelled as on the disk */
+    /* both separators */
     check_canonical("sub\\b.md", path_of(tmp, "sub/b.md"));
     check_canonical(".\\sub/..\\a.md", path_of(tmp, "a.md"));
-    check_canonical("SUB\\B.MD", path_of(tmp, "sub/b.md"));
-    check_canonical("Sub", path_of(tmp, "sub"));
     check_canonical("WITH SPACE\\CITTÀ È.MD", path_of(tmp, "with space/città è.md"));
-    check_canonical("SUB\\New.md", path_of(tmp, "sub/New.md")); /* a file that does not exist keeps its name */
 #endif
     CHECK(change_dir(cwd));
     free(cwd);

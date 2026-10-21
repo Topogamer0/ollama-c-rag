@@ -11,6 +11,7 @@
 #endif
 #else
 #define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE /* getattrlist */
 #endif
 
 #include "compat.h"
@@ -25,6 +26,10 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <stddef.h>
+#include <sys/attr.h>
+#endif
 #endif
 
 static void set_message(os_error_t *oe, os_error_kind_t kind, const char *message) {
@@ -625,9 +630,32 @@ FILE *rag_os_fopen(const char *path, const char *mode, os_error_t *oe) {
     return f;
 }
 
+#ifdef __APPLE__
+/* What getattrlist() writes for ATTR_CMN_NAME. */
+typedef struct name_reply {
+    uint32_t length;
+    attrreference_t name; /* where the name is, from here */
+    char data[1024];      /* 255 characters of UTF-16, in UTF-8 */
+} name_reply_t;
+#endif
+
 char *rag_os_disk_name(const char *path) {
+#ifdef __APPLE__
+    /* the file systems of macOS usually ignore case too: ask for the name as it is stored */
+    struct attrlist request = {.bitmapcount = ATTR_BIT_MAP_COUNT, .commonattr = ATTR_CMN_NAME};
+    name_reply_t reply;
+    if (getattrlist(path, &request, &reply, sizeof(reply), FSOPT_NOFOLLOW) != 0 || reply.name.attr_dataoffset < 0)
+        return NULL;
+    size_t start = offsetof(name_reply_t, name) + (size_t)reply.name.attr_dataoffset;
+    size_t n = reply.name.attr_length; /* the NUL included */
+    if (n < 2 || start > sizeof(reply) || n > sizeof(reply) - start) return NULL;
+    const char *name = (const char *)&reply + start;
+    if ((const char *)memchr(name, '\0', n) != name + n - 1) return NULL;
+    return concat(name, "", "");
+#else
     (void)path;
     return NULL;
+#endif
 }
 
 char *rag_os_getenv(const char *name) {

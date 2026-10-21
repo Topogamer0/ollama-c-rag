@@ -72,8 +72,9 @@ FILE *rag_os_fopen(const char *path, const char *mode, os_error_t *oe);
 
 /*
  * The name of the last component of an existing path as it is written on the
- * disk, to free: on Windows, where names do not depend on case, "A.MD" may be
- * "a.md". NULL elsewhere, or when it is not known.
+ * disk, to free: where names do not depend on case (Windows, and macOS
+ * usually), "A.MD" may be "a.md". A link gives its own name. NULL on other
+ * systems, or when it is not known.
  */
 char *rag_os_disk_name(const char *path);
 
