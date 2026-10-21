@@ -16,26 +16,25 @@ static int test_checks, test_failures;
         }                                                                            \
     } while (0)
 
-#define CHECK_STR(actual, expected)                                                            \
-    do {                                                                                       \
-        const char *a_ = (actual), *e_ = (expected);                                           \
-        test_checks++;                                                                         \
-        if (!a_ || !e_ || strcmp(a_, e_) != 0) {                                               \
-            test_failures++;                                                                   \
-            fprintf(stderr, "%s:%d: %s\n  got:      %s\n  expected: %s\n", __FILE__, __LINE__, \
-                    #actual, a_ ? a_ : "(null)", e_ ? e_ : "(null)");                          \
-        }                                                                                      \
+#define CHECK_STR(actual, expected)                                                                     \
+    do {                                                                                                \
+        const char *a_ = (actual), *e_ = (expected);                                                    \
+        test_checks++;                                                                                  \
+        if (!a_ || !e_ || strcmp(a_, e_) != 0) {                                                        \
+            test_failures++;                                                                            \
+            fprintf(stderr, "%s:%d: %s\n  got:      %s\n  expected: %s\n", __FILE__, __LINE__, #actual, \
+                    a_ ? a_ : "(null)", e_ ? e_ : "(null)");                                            \
+        }                                                                                               \
     } while (0)
 
-#define CHECK_SIZE(actual, expected)                                                             \
-    do {                                                                                         \
-        size_t a_ = (size_t)(actual), e_ = (size_t)(expected);                                   \
-        test_checks++;                                                                           \
-        if (a_ != e_) {                                                                          \
-            test_failures++;                                                                     \
-            fprintf(stderr, "%s:%d: %s\n  got:      %zu\n  expected: %zu\n", __FILE__, __LINE__, \
-                    #actual, a_, e_);                                                            \
-        }                                                                                        \
+#define CHECK_SIZE(actual, expected)                                                                               \
+    do {                                                                                                           \
+        size_t a_ = (size_t)(actual), e_ = (size_t)(expected);                                                     \
+        test_checks++;                                                                                             \
+        if (a_ != e_) {                                                                                            \
+            test_failures++;                                                                                       \
+            fprintf(stderr, "%s:%d: %s\n  got:      %zu\n  expected: %zu\n", __FILE__, __LINE__, #actual, a_, e_); \
+        }                                                                                                          \
     } while (0)
 
 #define RUN(test)                \

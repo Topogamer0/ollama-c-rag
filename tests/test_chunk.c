@@ -386,9 +386,10 @@ static uint32_t rng(void) {
 
 static void test_random_texts(void) {
     static const char *pieces[] = {
-        "word", "another", "città", "über", "日本語", "€uro", "😀", "x", "supercalifragilistic",
-        " ", " ", " ", "  ", "\t", ". ", "! ", "? ", ".\" ", "\n", "\n", "\n\n", "\r\n", "\n\n\n",
-        "# Heading\n", "3.14", "\xff", "\xe2\x82", "。", "",
+        "word", "another", "città", "über", "日本語", "€uro",        "😀",   "x",    "supercalifragilistic",
+        " ",    " ",       " ",     "  ",   "\t",     ". ",          "! ",   "? ",   ".\" ",
+        "\n",   "\n",      "\n\n",  "\r\n", "\n\n\n", "# Heading\n", "3.14", "\xff", "\xe2\x82",
+        "。",   "",
     };
     static const size_t sizes[] = {1, 2, 3, 5, 8, 13, 40, 100, 800};
     size_t npieces = sizeof(pieces) / sizeof(pieces[0]);
@@ -429,12 +430,15 @@ static void test_utf8(void) {
     } cases[] = {
         {"plain ascii", "plain ascii"},
         {"città 😀", "città 😀"},
-        {"a\xff" "b", "a\xEF\xBF\xBD" "b"},
-        {"\xe2\x82", "\xEF\xBF\xBD\xEF\xBF\xBD"},                         /* truncated */
-        {"\xc0\x80", "\xEF\xBF\xBD\xEF\xBF\xBD"},                         /* overlong */
-        {"\xed\xa0\x80", "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD"},         /* surrogate */
+        {"a\xff"
+         "b",
+         "a\xEF\xBF\xBD"
+         "b"},
+        {"\xe2\x82", "\xEF\xBF\xBD\xEF\xBF\xBD"},                                 /* truncated */
+        {"\xc0\x80", "\xEF\xBF\xBD\xEF\xBF\xBD"},                                 /* overlong */
+        {"\xed\xa0\x80", "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD"},                 /* surrogate */
         {"\xf4\x90\x80\x80", "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD"}, /* > U+10FFFF */
-        {"\xf4\x8f\xbf\xbf", "\xf4\x8f\xbf\xbf"},                         /* U+10FFFF */
+        {"\xf4\x8f\xbf\xbf", "\xf4\x8f\xbf\xbf"},                                 /* U+10FFFF */
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         size_t n = 0;

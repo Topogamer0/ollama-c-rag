@@ -16,6 +16,7 @@ endif()
 option(BUILD_SHARED_LIBS "Build ollama-rag as a shared library" OFF)
 option(RAG_BUILD_EXAMPLES "Build the examples" ${RAG_TOP_LEVEL})
 option(RAG_BUILD_TESTS "Build the tests" ${RAG_TOP_LEVEL})
+option(RAG_USE_SYSTEM_SQLITE "Link the system SQLite instead of the bundled amalgamation" OFF)
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     set(RAG_WARNINGS -Wall -Wextra -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wvla)
@@ -32,19 +33,66 @@ FetchContent_Declare(ollama_c
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(ollama_c)
 
+if(RAG_USE_SYSTEM_SQLITE)
+    find_package(SQLite3 REQUIRED)
+else()
+    # The amalgamation is compiled with the library, without warnings: it is not our code.
+    find_package(Threads REQUIRED)
+    add_library(rag_sqlite OBJECT third_party/sqlite/sqlite3.c)
+    target_compile_definitions(rag_sqlite PRIVATE
+        SQLITE_THREADSAFE=1
+        SQLITE_DQS=0
+        SQLITE_DEFAULT_MEMSTATUS=0
+        SQLITE_OMIT_LOAD_EXTENSION
+        SQLITE_OMIT_DEPRECATED)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(rag_sqlite PRIVATE -w)
+    elseif(MSVC)
+        target_compile_options(rag_sqlite PRIVATE /w)
+    endif()
+    set_target_properties(rag_sqlite PROPERTIES
+        C_STANDARD 99
+        C_EXTENSIONS ON
+        C_VISIBILITY_PRESET hidden
+        POSITION_INDEPENDENT_CODE ON)
+endif()
+
+include(CheckLibraryExists)
+check_library_exists(m sqrt "" RAG_HAVE_LIBM)
+
+# Adds SQLite and the system libraries to a target built from RAG_SOURCES.
+function(rag_link_dependencies target)
+    target_link_libraries(${target} PRIVATE ollama::ollama)
+    if(RAG_USE_SYSTEM_SQLITE)
+        target_link_libraries(${target} PRIVATE SQLite::SQLite3)
+    else()
+        target_sources(${target} PRIVATE $<TARGET_OBJECTS:rag_sqlite>)
+        target_include_directories(${target} SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite)
+        target_link_libraries(${target} PRIVATE Threads::Threads)
+    endif()
+    if(RAG_HAVE_LIBM)
+        target_link_libraries(${target} PRIVATE m)
+    endif()
+endfunction()
+
 # ---- library ----
 
 set(RAG_SOURCES
     src/chunk.c
+    src/db.c
+    src/fs.c
+    src/rag.c
+    src/sha256.c
     src/utf8.c
-    src/util.c)
+    src/util.c
+    src/vector.c)
 
 add_library(ollama_rag ${RAG_SOURCES})
 add_library(ollama::rag ALIAS ollama_rag)
 target_include_directories(ollama_rag PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(ollama_rag PRIVATE ollama::ollama)
+rag_link_dependencies(ollama_rag)
 target_compile_options(ollama_rag PRIVATE ${RAG_WARNINGS})
 set_target_properties(ollama_rag PROPERTIES
     OUTPUT_NAME ollama-rag

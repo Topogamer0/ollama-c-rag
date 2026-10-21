@@ -15,14 +15,7 @@
 
 #include <stdlib.h>
 
-enum {
-    BREAK_PARAGRAPH,
-    BREAK_SENTENCE_LINE,
-    BREAK_SENTENCE,
-    BREAK_LINE,
-    BREAK_WORD,
-    BREAK_LEVELS
-};
+enum { BREAK_PARAGRAPH, BREAK_SENTENCE_LINE, BREAK_SENTENCE, BREAK_LINE, BREAK_WORD, BREAK_LEVELS };
 
 static bool is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
 
@@ -109,9 +102,12 @@ static bool in_fence(const doc_t *d, size_t pos) {
     size_t lo = 0, hi = d->fences_count / 2;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        if (pos < d->fences[2 * mid]) hi = mid;
-        else if (pos >= d->fences[2 * mid + 1]) lo = mid + 1;
-        else return true;
+        if (pos < d->fences[2 * mid])
+            hi = mid;
+        else if (pos >= d->fences[2 * mid + 1])
+            lo = mid + 1;
+        else
+            return true;
     }
     return false;
 }
@@ -246,8 +242,7 @@ bool chunk_split(const char *text, size_t len, size_t size, size_t overlap, chun
     line_cursor_t starts = {0, 1}, ends = {0, 1};
     size_t pos = 0;
     size_t min_end = 0; /* a cut must leave the chunk longer than the previous one */
-    if (len >= 3 && (unsigned char)text[0] == 0xEF && (unsigned char)text[1] == 0xBB &&
-        (unsigned char)text[2] == 0xBF)
+    if (len >= 3 && (unsigned char)text[0] == 0xEF && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF)
         pos = 3; /* byte order mark */
 
     bool ok = true;
