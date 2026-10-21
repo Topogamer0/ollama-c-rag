@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 size_t rag_utf8_decode(const char *s, size_t len, size_t i, uint32_t *cp) {
     const unsigned char *u = (const unsigned char *)s + i;
@@ -84,9 +85,8 @@ char *rag_utf8_sanitize(const char *s, size_t len, size_t *out_len) {
             for (size_t k = 0; k < n; k++) out[o++] = s[i + k];
             i += n;
         } else {
-            out[o++] = (char)0xEF;
-            out[o++] = (char)0xBF;
-            out[o++] = (char)0xBD;
+            memcpy(out + o, "\xEF\xBF\xBD", 3); /* U+FFFD */
+            o += 3;
             i++;
         }
     }

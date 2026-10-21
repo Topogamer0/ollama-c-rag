@@ -1,16 +1,21 @@
 /* ragc: index your documents and ask questions about them, with Ollama. */
-#define _XOPEN_SOURCE 700
-
 #include <ollama_rag.h>
+
+#include "compat.h"
 
 #include <errno.h>
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #define DEFAULT_DB "ragc.db"
 
@@ -60,7 +65,8 @@ typedef struct cli {
     double min_score;
     const char *system;
     bool quiet;
-    char *cwd; /* paths below it are shown relative to it */
+    char *cwd;    /* paths below it are shown relative to it */
+    char *env[3]; /* RAGC_DB, RAGC_EMBED_MODEL, RAGC_CHAT_MODEL */
     const char *command;
     char **args;
     int nargs;
@@ -109,25 +115,41 @@ static const struct {
 
 /* ---- output ---- */
 
+/* True if `path` is below the directory `dir` (of length n > 1, not the root "/"). */
+static bool is_below(const char *path, const char *dir, size_t n) {
+#ifdef _WIN32
+    /* names do not depend on case */
+    for (size_t i = 0; i < n; i++) {
+        char a = path[i] >= 'A' && path[i] <= 'Z' ? (char)(path[i] - 'A' + 'a') : path[i];
+        char b = dir[i] >= 'A' && dir[i] <= 'Z' ? (char)(dir[i] - 'A' + 'a') : dir[i];
+        if (a != b) return false;
+    }
+#else
+    if (strncmp(path, dir, n) != 0) return false;
+#endif
+    return rag_os_is_sep(path[n]);
+}
+
 /* `path` relative to the current directory when it is below it. */
 static const char *shown(const cli_t *c, const char *path) {
     size_t n = c->cwd ? strlen(c->cwd) : 0;
-    if (n > 1 && strncmp(path, c->cwd, n) == 0 && path[n] == '/') return path + n + 1;
+    if (n > 1 && is_below(path, c->cwd, n)) return path + n + 1;
     return path;
 }
 
 /* Prints a message of the library, with the paths below the current directory made relative. */
 static void print_message(FILE *f, const cli_t *c, const char *message) {
     size_t n = c->cwd ? strlen(c->cwd) : 0;
-    const char *p = message;
-    const char *found;
-    while (n > 1 && (found = strstr(p, c->cwd)) != NULL) {
+    const char *start = message; /* what is not printed yet */
+    for (const char *p = message; n > 1 && *p; p++) {
         /* the library quotes the paths of its messages: only the start of a path is made relative */
-        bool below = found[n] == '/' && (found == message || found[-1] == '\'');
-        fwrite(p, 1, (size_t)(found - p) + (below ? 0 : 1), f);
-        p = below ? found + n + 1 : found + 1;
+        if ((p == message || p[-1] == '\'') && is_below(p, c->cwd, n)) {
+            fwrite(start, 1, (size_t)(p - start), f);
+            p += n; /* the separator */
+            start = p + 1;
+        }
     }
-    fputs(p, f);
+    fputs(start, f);
 }
 
 static void print_error(const cli_t *c, const rag_t *rag) {
@@ -143,15 +165,24 @@ static void print_lines(const rag_result_t *r) {
         printf("%zu-%zu", r->line_start, r->line_end);
 }
 
-/* Prints a text with every line indented. */
+/*
+ * Prints a text with every line indented, a line at a time (the console of
+ * Windows shows a character cut between two writes as garbage). "\r\n" ends
+ * a line too: stdout writes the line ends of the system.
+ */
 static void print_indented(const char *text, const char *indent) {
-    bool line_start = true;
-    for (const char *p = text; *p; p++) {
-        if (line_start && *p != '\n') fputs(indent, stdout); /* no spaces on empty lines */
-        putchar(*p);
-        line_start = *p == '\n';
+    for (const char *line = text;;) {
+        const char *end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        if (len > 0 && line[len - 1] == '\r') len--;
+        if (len > 0) { /* no spaces on empty lines */
+            fputs(indent, stdout);
+            fwrite(line, 1, len, stdout);
+        }
+        putchar('\n');
+        if (!end) break;
+        line = end + 1;
     }
-    putchar('\n');
 }
 
 static void format_size(char *out, size_t size, uint64_t bytes) {
@@ -332,8 +363,11 @@ static int cmd_index(cli_t *c, rag_t *rag) {
     rag_index_stats_t total = {0};
     int code = 0;
     for (int i = 0; i < c->nargs; i++) {
-        struct stat st;
-        bool dir = stat(c->args[i], &st) == 0 && S_ISDIR(st.st_mode);
+        /* the path as the library reads it ("dir.\" is "dir" on Windows) */
+        char *abs = rag_os_absolute(c->args[i], NULL);
+        os_stat_t st;
+        bool dir = abs && rag_os_stat(abs, true, &st, NULL) && st.type == RAG_OS_DIR;
+        free(abs);
         rag_index_stats_t s;
         rag_status_t rc = dir ? rag_add_dir(rag, c->args[i], &s) : rag_add_file(rag, c->args[i], &s);
         total.files_indexed += s.files_indexed;
@@ -446,11 +480,16 @@ static int cmd_remove(cli_t *c, rag_t *rag) {
     return code;
 }
 
-static int run(int argc, char **argv) {
-    cli_t c = {0};
-    c.db = getenv("RAGC_DB") && *getenv("RAGC_DB") ? getenv("RAGC_DB") : DEFAULT_DB;
-    c.options.embed_model = getenv("RAGC_EMBED_MODEL");
-    c.options.chat_model = getenv("RAGC_CHAT_MODEL");
+/* The current directory, with its links resolved like the paths of the library. */
+static char *current_directory(void) {
+    char *cwd = rag_os_getcwd(NULL);
+    char *real = cwd ? rag_os_realpath(cwd, NULL) : NULL;
+    if (!real) return cwd;
+    free(cwd);
+    return real;
+}
+
+static int run_cli(cli_t c, int argc, char **argv) {
     c.args = calloc((size_t)argc + 1, sizeof(*c.args));
     if (!c.args) return 1;
     char **args = c.args;
@@ -505,7 +544,7 @@ static int run(int argc, char **argv) {
         return 2;
     }
 
-    c.cwd = getcwd(NULL, 0);
+    c.cwd = current_directory();
     c.options.must_exist = !COMMANDS[k].creates;
     c.options.progress = on_progress;
     c.options.progress_data = &c;
@@ -525,12 +564,60 @@ static int run(int argc, char **argv) {
     return code;
 }
 
-int main(int argc, char **argv) {
-    int code = run(argc, argv);
-    /* a lost answer is an error, e.g. when the disk is full */
+/* Runs ragc, with the defaults from the environment. */
+static int run(int argc, char **argv) {
+    cli_t c = {0};
+    c.env[0] = rag_os_getenv("RAGC_DB");
+    c.env[1] = rag_os_getenv("RAGC_EMBED_MODEL");
+    c.env[2] = rag_os_getenv("RAGC_CHAT_MODEL");
+    c.db = c.env[0] && *c.env[0] ? c.env[0] : DEFAULT_DB;
+    c.options.embed_model = c.env[1];
+    c.options.chat_model = c.env[2];
+    int code = run_cli(c, argc, argv);
+    for (size_t i = 0; i < sizeof(c.env) / sizeof(c.env[0]); i++) free(c.env[i]);
+    return code;
+}
+
+/* The exit code, once the output is written: a lost answer is an error, e.g. when the disk is full. */
+static int finish(int code) {
     if (fflush(stdout) == EOF || ferror(stdout)) {
         fprintf(stderr, "ragc: cannot write the output: %s\n", strerror(errno ? errno : EIO));
         if (code == 0) code = 1;
     }
     return code;
 }
+
+#ifdef _WIN32
+static UINT console_page; /* the code page of the console, to restore */
+
+/* Ctrl+C and the like: the console gets its code page back before the process ends. */
+static BOOL WINAPI on_console_event(DWORD event) {
+    (void)event;
+    SetConsoleOutputCP(console_page);
+    return FALSE; /* the default handler ends the process */
+}
+
+/* The arguments in UTF-16, so that any of them can be passed (main() would get them in the ANSI code page). */
+int wmain(int argc, wchar_t **wargv);
+int wmain(int argc, wchar_t **wargv) {
+    char **argv = calloc((size_t)argc + 1, sizeof(*argv));
+    bool ok = argv != NULL;
+    for (int i = 0; ok && i < argc; i++) ok = (argv[i] = rag_os_from_wide(wargv[i])) != NULL;
+    int code = 1;
+    if (ok) {
+        /* the documents are in UTF-8, and so is the output: show it as such in the console */
+        console_page = GetConsoleOutputCP();
+        bool switched = console_page != 0 && console_page != CP_UTF8 && SetConsoleCtrlHandler(on_console_event, TRUE) &&
+                        SetConsoleOutputCP(CP_UTF8);
+        code = finish(run(argc, argv));
+        if (switched) SetConsoleOutputCP(console_page);
+    } else {
+        fputs("ragc: out of memory\n", stderr);
+    }
+    for (int i = 0; argv && i < argc; i++) free(argv[i]);
+    free(argv);
+    return code;
+}
+#else
+int main(int argc, char **argv) { return finish(run(argc, argv)); }
+#endif

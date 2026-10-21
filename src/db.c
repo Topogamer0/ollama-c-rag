@@ -1,6 +1,7 @@
 /* SQLite storage of the index. */
 #include "internal.h"
 
+#include "compat.h"
 #include "sqlite3.h"
 
 #include <stdio.h>
@@ -300,22 +301,35 @@ rag_status_t rag_db_find_file(rag_t *rag, const char *path, db_file_t *out, bool
 }
 
 rag_status_t rag_db_files_under(rag_t *rag, const char *dir, db_file_list_t *out) {
-    /* paths starting with "dir/" are the ones in ["dir/", "dir0"): '0' follows '/' */
+    /*
+     * paths starting with "dir/" are the ones in ["dir/", "dir0"): '0' follows
+     * '/'; on Windows, "dir\" and "dir]"
+     */
     size_t n = strlen(dir);
-    char *lower = n > 0 && dir[n - 1] == '/' ? rag_strdup(dir) : rag_format("%s/", dir);
+    char *lower = n > 0 && dir[n - 1] == RAG_PATH_SEP ? rag_strdup(dir) : rag_format("%s%c", dir, RAG_PATH_SEP);
     char *upper = rag_strdup(lower);
     if (!lower || !upper) {
         free(lower);
         free(upper);
         return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     }
-    upper[strlen(upper) - 1] = '0';
+    upper[strlen(upper) - 1] = (char)(RAG_PATH_SEP + 1);
 
+    /*
+     * Names do not depend on case on Windows: a directory renamed in another
+     * case still covers its files (ASCII letters only). The order stays binary.
+     */
+#ifdef _WIN32
+#define PATH_COLLATION " COLLATE NOCASE"
+#else
+#define PATH_COLLATION ""
+#endif
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag,
-                              "SELECT " FILE_COLUMNS " FROM files "
-                              "WHERE path = ?1 OR (path >= ?2 AND path < ?3) ORDER BY path",
+                              "SELECT " FILE_COLUMNS " FROM files WHERE path = ?1" PATH_COLLATION
+                              " OR (path >= ?2" PATH_COLLATION " AND path < ?3" PATH_COLLATION ") ORDER BY path",
                               &stmt);
+#undef PATH_COLLATION
     if (st == RAG_OK) {
         bind_text(stmt, 1, dir);
         bind_text(stmt, 2, lower);

@@ -1,6 +1,8 @@
 /* Answers: a prompt made of the chunks found, sent to the chat model. */
 #include "internal.h"
 
+#include "compat.h"
+
 #include <ollama.h>
 
 #include <stdlib.h>
@@ -13,8 +15,10 @@ static const char DEFAULT_SYSTEM_PROMPT[] =
     "language of the question.";
 
 static const char *base_name(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
+    const char *name = path;
+    for (const char *p = path; *p; p++)
+        if (rag_os_is_sep(*p)) name = p + 1;
+    return name;
 }
 
 /* The user message: the passages, then the question. */

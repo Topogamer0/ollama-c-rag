@@ -143,7 +143,7 @@ static rag_status_t flush(indexer_t *ix) {
     float *vectors;
     size_t dims;
     rag_status_t st = rag_embed_texts(rag, texts, n, rag->document_prefix, &vectors, &dims);
-    free(texts);
+    free((void *)texts); /* not const for MSVC (C4090) */
     if (st != RAG_OK) return st;
 
     size_t old_dims = rag->stored_dimensions;
@@ -268,7 +268,11 @@ static rag_status_t index_file(indexer_t *ix, const char *path, bool *file_error
     else if (st == RAG_OK && !info.is_file)
         st = rag_err_set(&e, RAG_ERROR_IO, "'%s' is not a regular file", path);
     if (st == RAG_OK) st = rag_fs_read_file(path, &content, &e);
-    if (st == RAG_OK && memchr(content.data, '\0', content.len))
+    /* what Windows PowerShell 5 and the "Unicode" of Notepad write */
+    const unsigned char *bom = (const unsigned char *)content.data;
+    if (st == RAG_OK && content.len >= 2 && ((bom[0] == 0xFF && bom[1] == 0xFE) || (bom[0] == 0xFE && bom[1] == 0xFF)))
+        st = rag_err_set(&e, RAG_ERROR_IO, "'%s' is UTF-16 text: save it as UTF-8", path);
+    else if (st == RAG_OK && memchr(content.data, '\0', content.len))
         st = rag_err_set(&e, RAG_ERROR_IO, "'%s' is a binary file", path);
     if (st != RAG_OK) {
         *file_error = st != RAG_ERROR_MEMORY;
@@ -350,11 +354,22 @@ static rag_status_t remove_deleted(indexer_t *ix, const char *dir, const fs_list
         rag_err_init(&e);
         fs_info_t info;
         rag_status_t exists = rag_fs_stat(f->path, &info, &e);
+        bool renamed = false;
+        if (exists == RAG_OK && info.is_file) {
+            /*
+             * Still there, by another path: renamed with another case where names
+             * do not depend on case (Windows, and macOS usually), or below a
+             * directory that became a link.
+             */
+            char *now = rag_fs_canonical(f->path, &e);
+            renamed = now && strcmp(now, f->path) != 0;
+            free(now);
+        }
         rag_err_free(&e);
-        if (exists == RAG_OK ? !info.is_file : exists == RAG_ERROR_NOT_FOUND) gone[count++] = f;
+        if (renamed || (exists == RAG_OK ? !info.is_file : exists == RAG_ERROR_NOT_FOUND)) gone[count++] = f;
     }
     if (st == RAG_OK) st = rag_remove_listed(rag, gone, count, ix->stats, ix->examined, ix->total);
-    free(gone);
+    free((void *)gone); /* not const for MSVC (C4090) */
     rag_db_file_list_free(&files);
     return st;
 }

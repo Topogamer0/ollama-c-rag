@@ -22,9 +22,11 @@ foreach(name IN ITEMS chunk db fs vector)
     add_test(NAME ${name} COMMAND test_${name})
 endforeach()
 
-# Integration tests use the public API against a fake Ollama server.
+# Integration tests use the public API against a fake Ollama server, and the
+# portability layer for their temporary files (a DLL does not export it).
 find_package(CURL REQUIRED)
-add_executable(test_rag test_rag.c)
+add_executable(test_rag test_rag.c ${PROJECT_SOURCE_DIR}/src/compat.c)
+target_include_directories(test_rag PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(test_rag PRIVATE ollama::rag CURL::libcurl)
 target_compile_options(test_rag PRIVATE ${RAG_WARNINGS})
 set_target_properties(test_rag PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)

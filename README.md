@@ -6,7 +6,8 @@ passages that answer a question, and let a local model answer it from them, citi
 
 It is built on [Ollama](https://ollama.com) through [Ollama-C](https://github.com/Topogamer0/Ollama-C)
 for embeddings and chat, and on SQLite for storage. SQLite is included, so the only library to
-install is libcurl.
+install is libcurl. It runs on Linux, macOS and Windows, where a ready-made `ragc.exe` is
+[available](#ragc-on-windows).
 
 ```console
 $ ragc index notes
@@ -48,7 +49,7 @@ Sources:
 
 Requirements: a C99 compiler, CMake 3.14 or later (3.20 for the `ctest --test-dir` and
 `cmake --install` commands below; with older versions run `ctest` and `make install` in `build`), git
-(CMake downloads Ollama-C v0.1.0), and
+(CMake downloads Ollama-C v0.2.0), and
 libcurl with its development headers (`libcurl4-openssl-dev` on Debian/Ubuntu, `libcurl-devel` on
 Fedora; it comes with macOS). The tests also need Python 3.
 
@@ -59,6 +60,28 @@ ctest --test-dir build            # optional: runs the tests against a fake Olla
 sudo cmake --install build        # installs ragc, the library, ollama_rag.h, CMake and pkg-config files
 ```
 
+### On Windows
+
+With Visual Studio 2022 (or its Build Tools) and the "Desktop development with C++" workload,
+which come with CMake, take libcurl from [vcpkg](https://vcpkg.io), then build from a developer
+command prompt:
+
+```bat
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+C:\vcpkg\vcpkg install curl:x64-windows
+
+cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build --config Release
+ctest --test-dir build -C Release
+```
+
+`ragc.exe` is then in `build\bin\Release`, next to the DLLs of libcurl and zlib (vcpkg copies the DLLs
+that programs need), along with the examples and the tests. Configure with
+`-DRAG_INSTALL_RUNTIME_DLLS=ON` to have `cmake --install build --config Release --prefix C:\ragc`
+put these DLLs, and the C runtime of the compiler, next to the installed `ragc.exe`, so that the
+directory works on any computer.
+
 | CMake option | Default | |
 | --- | --- | --- |
 | `BUILD_SHARED_LIBS` | `OFF` | build a shared library |
@@ -67,6 +90,8 @@ sudo cmake --install build        # installs ragc, the library, ollama_rag.h, CM
 | `RAG_INSTALL` | `ON` | generate the install target (top-level builds only) |
 | `RAG_USE_SYSTEM_SQLITE` | `OFF` | link the system SQLite instead of the bundled one |
 | `RAG_USE_SYSTEM_OLLAMA_C` | `OFF` | use an installed Ollama-C (`find_package(ollama-c)`) instead of downloading it |
+| `RAG_WERROR` | `OFF` | treat the warnings of ollama-rag-c as errors (`-Werror`, `/WX`), not those of its dependencies |
+| `RAG_INSTALL_RUNTIME_DLLS` | `OFF` | Windows: install the DLLs that `ragc.exe` needs next to it (CMake 3.21) |
 
 To build offline, point CMake to a copy of Ollama-C: `-DFETCHCONTENT_SOURCE_DIR_OLLAMA_C=/path/to/Ollama-C`.
 
@@ -126,7 +151,9 @@ int main(void) {
 
 The [`examples`](examples) directory also has [`index-notes`](examples/index-notes.c), which indexes a
 folder and reports the progress, and [`chat-docs`](examples/chat-docs.c), an interactive chat over your
-documents. They are built in `build/examples/`.
+documents. They are built in `build/examples/` (`build\bin\<config>` on Windows, where they get their
+arguments in UTF-8 on Windows 10 1903 or later; `chat-docs` switches the console to UTF-8 itself, for
+`index-notes` run `chcp 65001` first).
 
 ## The `ragc` command
 
@@ -153,7 +180,7 @@ ragc [options] <command> [arguments]
 | `--chunk-size N`, `--chunk-overlap N` | chunking, in characters (default: the database's, or 800 and 100; the default overlap is at most a quarter of the chunk size) |
 | `--batch-size N` | chunks per embedding request (default: 32, at most 65536) |
 | `--dimensions N` | size of the embeddings, for models that can shorten them |
-| `--system TEXT` | system prompt of the chat model (`""` for none) |
+| `--system TEXT` | system prompt of the chat model (`--system=` for none) |
 | `--timeout SECONDS` | network timeout (default: none) |
 | `-q`, `--quiet` | print only the results: no progress, no sources |
 
@@ -187,6 +214,62 @@ ragc: the index 'ragc.db' was built with the embedding model 'embeddinggemma', n
 Choose another database with --db.
 ```
 
+### ragc on Windows
+
+Every [release](https://github.com/Topogamer0/ollama-c-rag/releases) has a
+`ragc-<version>-windows-x64.zip`: `ragc.exe` with the DLLs it needs (libcurl, zlib, the C
+runtime), for Windows 10 or later on x64. It holds a `ragc-<version>-windows-x64` folder: extract it
+anywhere, for example in `C:\Tools`, and add `C:\Tools\ragc-<version>-windows-x64` to `PATH`
+(Settings > System > About > Advanced system settings > Environment Variables), or run `ragc.exe`
+by its full path. Windows may warn about a program downloaded from
+the internet ("Windows protected your PC": More info > Run anyway, or `Unblock-File ragc.exe` in
+PowerShell). You also need [Ollama for Windows](https://ollama.com/download/windows), running, and
+the models:
+
+```bat
+ollama pull embeddinggemma
+ollama pull gemma3
+```
+
+Then, in a Command Prompt or in PowerShell:
+
+```console
+C:\Users\me\Documents> ragc index Notes
+indexed  Notes\shopping.txt (1 chunk)
+indexed  Notes\trips\holidays.md (1 chunk)
+indexed  Notes\work.md (1 chunk)
+3 indexed, 0 unchanged, 0 removed, 0 skipped (3 chunks added)
+
+C:\Users\me\Documents> ragc -k 2 ask When do we go to Sicily?
+In August, for a week: first Palermo, then the beaches near Cefalù [1].
+
+Sources:
+  [1] Notes\trips\holidays.md:1-5 (score 0.71)
+  [2] Notes\work.md:1-3 (score 0.12)
+```
+
+- **Paths** can use `\` or `/`, in any case, with spaces (in quotes) and any character:
+  `ragc index "C:\Users\me\OneDrive\Città e note"`. The index stores them with `\`, spelled as on
+  the disk, so `notes\a.md` and `NOTES/A.MD` are the same file. A quoted path must not end with a
+  backslash (`"C:\My Notes\"` passes a `"` to the program): write `"C:\My Notes"`. Neither the Command
+  Prompt nor PowerShell expands `*.md` for programs like `ragc`: give the directory instead.
+- **Hidden files**, with the hidden attribute or a name starting with `.`, are skipped.
+- **Text files** must be UTF-8 (or ASCII), with any line ends. UTF-16 files, which Windows
+  PowerShell 5 writes with `>` and `Out-File`, and Notepad with its "Unicode" encodings, are skipped
+  with a message: save them as UTF-8. In files of the ANSI code page, letters like `è` are lost.
+- **The database** is `ragc.db` in the current directory, or `--db`, or the `RAGC_DB` variable:
+  `set RAGC_DB=C:\Users\me\notes.db` in the Command Prompt, `$env:RAGC_DB = "C:\Users\me\notes.db"` in
+  PowerShell, `setx RAGC_DB C:\Users\me\notes.db` to keep it for the next windows.
+- **Questions** need quotes when they contain characters that the shell interprets: `&`, `|`, `<`,
+  `>`, `^` in the Command Prompt; in PowerShell, anything but letters, digits, spaces and
+  `. , : ? !` (`#` starts a comment there, so `ragc ask step #3` would ask "step").
+- **The output** is UTF-8: `ragc` switches the console to UTF-8 while it runs. When PowerShell reads
+  it (in a pipe, or in a variable), it decodes it with `[Console]::OutputEncoding`: run
+  `[Console]::OutputEncoding = [Text.Encoding]::UTF8` first.
+- **OLLAMA_HOST**: if it is `0.0.0.0` (as the Ollama documentation suggests to reach the server
+  from other computers), Windows refuses to connect to that address: use
+  `ragc --host http://127.0.0.1:11434`, or set `OLLAMA_HOST` to `127.0.0.1` in that window.
+
 ## How it works
 
 **Chunking.** A chunk holds at most `chunk_size` characters (Unicode code points). When the rest of
@@ -196,13 +279,14 @@ end of a sentence, a line break, and a space between words; only text without an
 inside a word. A chunk never ends right after a heading, and `#` lines inside fenced code blocks
 are not headings. The next chunk starts `chunk_overlap` characters earlier, moved to the start of
 a line, a sentence or a word. Invalid UTF-8 is replaced before being sent to Ollama; files that
-contain NUL bytes are considered binary and skipped.
+contain NUL bytes are considered binary and skipped (UTF-16 files are reported as such).
 
 **Storage.** The SQLite database has four tables: `meta` (the embedding model, the size of the
 embeddings and the chunking settings), `files` (path, SHA-256 of the content, settings used),
 `chunks` (text, byte offsets, first and last line) and `vectors` (one normalized float32 BLOB per
 chunk, in a table of its own so that searches only read vectors). Paths are stored absolute, with
-the links of their directories resolved.
+the links of their directories resolved and, where names do not depend on case (Windows, and macOS
+usually), the names spelled as on the disk; on Windows with `\` separators.
 
 **Incremental indexing.** A file is processed again when its hash or the settings it was indexed
 with (chunk size, overlap, embedding size, document prefix) change. Embeddings are requested in
@@ -297,7 +381,7 @@ embedding model and size are checked again under SQLite's write lock before anyt
   by the embedding model.
 - **One embedding model per database.** Changing it means building another database.
 - **Single questions.** `rag_ask` has no conversation history.
-- **POSIX only.** Linux and macOS are tested; Windows is not supported yet.
+- **Platforms.** Linux, macOS and Windows (MSVC, x64) are tested. The Windows zip is for x64 only.
 - **Bundled SQLite.** A static build contains SQLite's symbols: if the program links another
   SQLite, configure with `-DRAG_USE_SYSTEM_SQLITE=ON`.
 
@@ -307,7 +391,8 @@ embedding model and size are checked again under SQLite's write lock before anyt
 integration tests, which drive the library and `ragc` against a fake Ollama server
 ([`tests/mock_server.py`](tests/mock_server.py)) that returns deterministic embeddings: no Ollama
 or model is needed. The CI builds and tests on Linux (GCC and Clang, static and shared, with
-AddressSanitizer and UndefinedBehaviorSanitizer) and on macOS.
+AddressSanitizer and UndefinedBehaviorSanitizer), on macOS, and on Windows (MSVC, static and DLL
+builds, with libcurl from vcpkg). A tag `v*` builds the Windows zip and attaches it to the release.
 
 ## License
 

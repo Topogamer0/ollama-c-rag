@@ -1,6 +1,8 @@
 /* Unit tests of the database: schema, settings, embedding model checks, removal. */
+#ifndef _WIN32
 #define _XOPEN_SOURCE 700
-#define _DARWIN_C_SOURCE /* mkdtemp() on macOS */
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "internal.h"
 #include "sqlite3.h"
@@ -228,8 +230,8 @@ static void test_settings(void) {
     rag_close(rag);
 
     /* a stored overlap too large for a smaller chunk size falls back to a quarter of it */
-    rag_options_t small = {.chunk_size = 20};
-    rag = open_ok(path, &small);
+    rag_options_t tiny = {.chunk_size = 20};
+    rag = open_ok(path, &tiny);
     CHECK_SIZE(rag->chunk_overlap, 5);
     rag_close(rag);
 
@@ -313,10 +315,10 @@ static void test_remove(void) {
     CHECK_SIZE(stats.files_removed, 0);
 
     /* a file that does not exist anymore, by a relative path */
-    char *cwd = getcwd(NULL, 0);
-    CHECK(chdir(tmp) == 0);
+    char *cwd = current_dir();
+    CHECK(change_dir(tmp));
     CHECK(rag_remove_file(rag, "docsx/../docsx/c.md", NULL) == RAG_OK);
-    CHECK(chdir(cwd) == 0);
+    CHECK(change_dir(cwd));
     free(cwd);
     CHECK(rag_remove_file(rag, d, &stats) == RAG_OK);
     CHECK_SIZE(stats.files_removed, 1);
@@ -334,9 +336,18 @@ static void test_remove(void) {
     free(d);
 }
 
+/* Paths as the library stores them. */
+#ifdef _WIN32
+#define ROOT "C:\\"
+#define SEP "\\"
+#else
+#define ROOT "/"
+#define SEP "/"
+#endif
+
 static void test_replace_file(void) {
     rag_t *rag = open_ok(":memory:", NULL);
-    const char *path = "/notes/a.md";
+    const char *path = ROOT "notes" SEP "a.md";
     add_fake_file(rag, path, 3, 4);
     db_file_t first = {0};
     bool found = false;
@@ -358,19 +369,20 @@ static void test_replace_file(void) {
     rag_db_file_release(&first);
     rag_db_file_release(&second);
 
-    CHECK(rag_db_find_file(rag, "/notes/b.md", &second, &found) == RAG_OK);
+    CHECK(rag_db_find_file(rag, ROOT "notes" SEP "b.md", &second, &found) == RAG_OK);
     CHECK(!found);
 
-    /* "/notes" covers "/notes/a.md" but not "/notes2/x.md"; "/" covers everything */
-    add_fake_file(rag, "/notes2/x.md", 1, 4);
+    /* "/notes" covers "/notes/a.md" but not "/notes2/x.md" nor "/notes]"; "/" covers everything */
+    add_fake_file(rag, ROOT "notes2" SEP "x.md", 1, 4);
+    add_fake_file(rag, ROOT "notes]", 1, 4);
     db_file_list_t list = {0};
-    CHECK(rag_db_files_under(rag, "/notes", &list) == RAG_OK);
+    CHECK(rag_db_files_under(rag, ROOT "notes", &list) == RAG_OK);
     CHECK_SIZE(list.count, 1);
     rag_db_file_list_free(&list);
-    CHECK(rag_db_files_under(rag, "/", &list) == RAG_OK);
-    CHECK_SIZE(list.count, 2);
+    CHECK(rag_db_files_under(rag, ROOT, &list) == RAG_OK);
+    CHECK_SIZE(list.count, 3);
     rag_db_file_list_free(&list);
-    CHECK(rag_db_files_under(rag, "/notes/a.md", &list) == RAG_OK);
+    CHECK(rag_db_files_under(rag, ROOT "notes" SEP "a.md", &list) == RAG_OK);
     CHECK_SIZE(list.count, 1);
     rag_db_file_list_free(&list);
     rag_close(rag);

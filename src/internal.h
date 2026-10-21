@@ -123,7 +123,8 @@ typedef struct fs_list {
 /*
  * Absolute path, without "." and "..", with the links of the directories
  * resolved. The last component of a file is kept even if it is a link, and
- * does not need to exist. NULL on failure, with the reason in `e`.
+ * does not need to exist. On Windows the separators are "\" and names are
+ * spelled as on the disk. NULL on failure, with the reason in `e`.
  */
 char *rag_fs_canonical(const char *path, err_t *e);
 /* True for the extensions of text files: .txt, .md, .markdown, ... */
@@ -134,8 +135,9 @@ rag_status_t rag_fs_stat(const char *path, fs_info_t *info, err_t *e);
 rag_status_t rag_fs_read_file(const char *path, buf_t *out, err_t *e);
 /*
  * Lists the text files below a directory, recursively, sorted by path.
- * Hidden files and directories (".git", ...) and links to directories are
- * skipped. Subdirectories that cannot be read are listed with an error.
+ * Hidden files and directories (".git", ..., and on Windows the ones with the
+ * hidden attribute) and links to directories are skipped. Subdirectories that
+ * cannot be read are listed with an error.
  */
 rag_status_t rag_fs_list_dir(const char *dir, fs_list_t *out, err_t *e);
 void rag_fs_list_free(fs_list_t *list);
@@ -246,7 +248,7 @@ rag_status_t rag_db_set_meta_int(rag_t *rag, const char *key, int64_t value);
 
 /* Looks up a file by path; *found tells whether it exists. */
 rag_status_t rag_db_find_file(rag_t *rag, const char *path, db_file_t *out, bool *found);
-/* Files whose path is `dir` or starts with `dir` + "/", sorted by path. */
+/* Files whose path is `dir` or starts with `dir` and a separator, sorted by path. */
 rag_status_t rag_db_files_under(rag_t *rag, const char *dir, db_file_list_t *out);
 /* Inserts a file (its id is set) or replaces the one with the same path, dropping its chunks. */
 rag_status_t rag_db_put_file(rag_t *rag, db_file_t *file);

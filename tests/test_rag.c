@@ -2,8 +2,10 @@
  * Integration tests of the public API against tests/mock_server.py, which
  * starts a fake Ollama server and runs this program with OLLAMA_HOST set.
  */
+#ifndef _WIN32
 #define _XOPEN_SOURCE 700
-#define _DARWIN_C_SOURCE /* mkdtemp() on macOS */
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "ollama_rag.h"
 #include "test.h"
@@ -98,7 +100,7 @@ static int on_progress(const rag_progress_t *p, void *data) {
         snprintf(ev->failure, sizeof(ev->failure), "%s", p->message ? p->message : "");
         break;
     }
-    CHECK(p->path && p->path[0] == '/');
+    CHECK(p->path && rag_os_root_len(p->path) > 0); /* absolute */
     CHECK(p->done <= p->total);
     ev->last_done = p->done;
     ev->total = p->total;
@@ -115,7 +117,11 @@ static rag_t *open_index(const char *name, rag_options_t options) {
 }
 
 static void write_binary(const char *path) {
-    FILE *f = fopen(path, "wb");
+    FILE *f = rag_os_fopen(path, "wb", NULL);
+    if (!f) {
+        perror(path);
+        exit(2);
+    }
     fwrite("abc\0def", 1, 7, f);
     fclose(f);
 }
@@ -283,7 +289,7 @@ static void test_incremental(void) {
 
     /* a deleted file */
     char *cooking = dup_string(path_of(docs, "sub/cooking.md"));
-    unlink(cooking);
+    remove_file(cooking);
     CHECK(rag_add_dir(rag, docs, &stats) == RAG_OK);
     CHECK_SIZE(stats.files_removed, 1);
     CHECK(stats.chunks_removed >= 1);
@@ -317,13 +323,13 @@ static void test_incremental(void) {
     CHECK_SIZE(info.files, 5);
 
     /* relative paths */
-    char *cwd = getcwd(NULL, 0);
-    CHECK(chdir(docs) == 0);
+    char *cwd = current_dir();
+    CHECK(change_dir(docs));
     CHECK(rag_add_file(rag, "./fruit.md", &stats) == RAG_OK);
     CHECK_SIZE(stats.files_unchanged, 1);
     CHECK(rag_add_dir(rag, ".", &stats) == RAG_OK);
     CHECK_SIZE(stats.files_indexed, 0);
-    CHECK(chdir(cwd) == 0);
+    CHECK(change_dir(cwd));
     free(cwd);
 
     CHECK(rag_add_dir(rag, path_of(docs, "fruit.md"), &stats) == RAG_ERROR_INVALID);
@@ -377,7 +383,7 @@ static void test_model_mismatch(void) {
     CHECK(r == NULL);
     rag_close(rag);
     mock_reset();
-    unlink(path_of(docs, "new.md"));
+    remove_file(path_of(docs, "new.md"));
 }
 
 static void test_prefixes(void) {
@@ -470,7 +476,7 @@ static void test_interrupted(void) {
     }
     rag_results_free(r);
     rag_close(rag);
-    unlink(path_of(docs, "big.md"));
+    remove_file(path_of(docs, "big.md"));
 }
 
 static void test_abort(void) {
@@ -649,18 +655,18 @@ static void test_models_of_two_handles(void) {
 
     /* the same with two sizes of embeddings */
     rag_t *big = open_index("two-sizes.db", (rag_options_t){0});
-    rag_t *small = open_index("two-sizes.db", (rag_options_t){.dimensions = 64});
+    rag_t *narrow = open_index("two-sizes.db", (rag_options_t){.dimensions = 64});
     CHECK(rag_add_file(big, path_of(docs, "fruit.md"), &stats) == RAG_OK);
-    CHECK(rag_add_file(small, path_of(docs, "code.txt"), &stats) == RAG_ERROR_MODEL_MISMATCH);
-    CHECK(strstr(rag_last_error(small)->message, "256") != NULL);
+    CHECK(rag_add_file(narrow, path_of(docs, "code.txt"), &stats) == RAG_ERROR_MODEL_MISMATCH);
+    CHECK(strstr(rag_last_error(narrow)->message, "256") != NULL);
     /* the handle opened before sees what the other stored */
-    CHECK(rag_stats(small, &info) == RAG_OK);
+    CHECK(rag_stats(narrow, &info) == RAG_OK);
     CHECK_SIZE(info.dimensions, 256);
     CHECK(rag_search(big, "bananas", NULL, &r) == RAG_OK);
     CHECK(r && r->count == 1);
     rag_results_free(r);
     rag_close(big);
-    rag_close(small);
+    rag_close(narrow);
 }
 
 static void test_emptied_index(void) {
@@ -904,6 +910,72 @@ static void test_open_fails_without_changes(void) {
     CHECK(!file_exists(path_of(tmp, "never.db")));
 }
 
+/*
+ * A file renamed in another case is still there under its old name where
+ * names do not depend on case (Windows, and macOS usually): it is removed
+ * all the same.
+ */
+static void test_renamed_in_case(void) {
+    char *dir = dup_string(path_of(tmp, "case"));
+    write_file(path_of(dir, "Fruit.md"), "Bananas are yellow.");
+    write_file(path_of(dir, "Other.md"), "Apples are red.");
+    rag_t *rag = open_index("case.db", (rag_options_t){0});
+    rag_index_stats_t stats;
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 2);
+
+    /* like a rename, which Wine does not do when only the case changes */
+    CHECK(remove_file(path_of(dir, "Fruit.md")));
+    write_file(path_of(dir, "fruit.md"), "Bananas are yellow.");
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    CHECK_SIZE(stats.files_unchanged, 1);
+    CHECK_SIZE(stats.files_removed, 1);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 2);
+    rag_results_t *r = NULL;
+    CHECK(rag_search(rag, "bananas yellow", NULL, &r) == RAG_OK);
+    CHECK(r && r->count == 2);
+    if (r && r->count > 0) CHECK_STR(r->items[0].path, path_of(dir, "fruit.md"));
+    rag_results_free(r);
+
+    /* indexing the file again finds it up to date */
+    CHECK(rag_add_file(rag, path_of(dir, "fruit.md"), &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_unchanged, 1);
+
+#ifdef _WIN32
+    /* a directory renamed in another case, indexed by its new name */
+    char *notes = dup_string(path_of(dir, "Notes"));
+    write_file(path_of(notes, "a.md"), "Cherries are red.");
+    CHECK(rag_add_dir(rag, notes, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    remove_tree(notes);
+    write_file(path_of(dir, "notes/a.md"), "Cherries are red.");
+    CHECK(rag_add_dir(rag, path_of(dir, "notes"), &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_indexed, 1);
+    CHECK_SIZE(stats.files_removed, 1);
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 3);
+    /* and a deleted file removed by another spelling */
+    remove_file(path_of(dir, "notes/a.md"));
+    CHECK(rag_remove_file(rag, path_of(dir, "NOTES/A.MD"), &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_removed, 1);
+    free(notes);
+#endif
+    rag_close(rag);
+    free(dir);
+}
+
+/* A host that Ollama-C rejects, like the Python client, is an invalid argument. */
+static void test_invalid_host(void) {
+    rag_t *rag = open_index("invalid-host.db", (rag_options_t){.host = "http://[::1"});
+    rag_index_stats_t stats;
+    CHECK(rag_add_file(rag, path_of(docs, "fruit.md"), &stats) == RAG_ERROR_INVALID);
+    CHECK(strstr(rag_last_error(rag)->message, "invalid Ollama host 'http://[::1'") != NULL);
+    rag_close(rag);
+}
+
 static void test_empty_index(void) {
     rag_t *rag = open_index("empty.db", (rag_options_t){0});
     rag_results_t *r = NULL;
@@ -939,6 +1011,8 @@ int main(void) {
     RUN(test_removal_with_reused_ids);
     RUN(test_file_removed_while_indexed);
     RUN(test_open_fails_without_changes);
+    RUN(test_renamed_in_case);
+    RUN(test_invalid_host);
     RUN(test_empty_index);
 
     remove_tree(tmp);
