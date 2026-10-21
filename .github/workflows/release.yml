@@ -6,7 +6,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-    branches: [claude/ollama-rag-c-project-wh3qtp]
   workflow_dispatch:
 
 permissions:
@@ -27,8 +26,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DRAG_BUILD_EXAMPLES=OFF -DRAG_INSTALL_RUNTIME_DLLS=ON `
-            -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /DWIN32_LEAN_AND_MEAN" -DCMAKE_INSTALL_LIBDIR="$PWD/install/lib" -DCMAKE_INSTALL_PREFIX="$PWD/install"
+            -DRAG_BUILD_EXAMPLES=OFF -DRAG_INSTALL_RUNTIME_DLLS=ON
           cmake --build build --config Release -j
           ctest --test-dir build -C Release --output-on-failure
       - name: Package

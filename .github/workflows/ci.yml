@@ -72,16 +72,12 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   windows:
-    name: Windows (MSVC, shared=${{ matrix.shared }}, lean=${{ matrix.lean }})
+    name: Windows (MSVC, shared=${{ matrix.shared }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         shared: [OFF, ON]
-        lean: ['/DWIN32_LEAN_AND_MEAN']
-        include:
-          - shared: OFF
-            lean: 
     env:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
     defaults:
@@ -113,7 +109,6 @@ jobs:
         run: >
           cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:TOOLCHAIN"
           -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DRAG_WERROR=ON -DRAG_INSTALL_RUNTIME_DLLS=ON
-          -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS ${{ matrix.lean }}" -DCMAKE_INSTALL_LIBDIR="$PWD/prefix/lib" -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
       - name: Build
         run: cmake --build build --config Debug -j
       - name: Test
