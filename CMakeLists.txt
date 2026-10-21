@@ -14,6 +14,7 @@ else()
 endif()
 
 option(BUILD_SHARED_LIBS "Build ollama-rag as a shared library" OFF)
+option(RAG_BUILD_CLI "Build the ragc command line tool" ON)
 option(RAG_BUILD_EXAMPLES "Build the examples" ${RAG_TOP_LEVEL})
 option(RAG_BUILD_TESTS "Build the tests" ${RAG_TOP_LEVEL})
 option(RAG_USE_SYSTEM_SQLITE "Link the system SQLite instead of the bundled amalgamation" OFF)
@@ -77,6 +78,7 @@ endfunction()
 # ---- library ----
 
 set(RAG_SOURCES
+    src/ask.c
     src/chunk.c
     src/db.c
     src/embed.c
@@ -104,6 +106,13 @@ set_target_properties(ollama_rag PROPERTIES
     C_VISIBILITY_PRESET hidden
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR})
+
+if(RAG_BUILD_CLI)
+    add_executable(ragc cli/ragc.c)
+    target_link_libraries(ragc PRIVATE ollama::rag)
+    target_compile_options(ragc PRIVATE ${RAG_WARNINGS})
+    set_target_properties(ragc PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+endif()
 
 if(RAG_BUILD_TESTS)
     enable_testing()

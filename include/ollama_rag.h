@@ -232,6 +232,42 @@ RAG_API rag_status_t rag_search(rag_t *rag, const char *query, const rag_search_
 RAG_API void rag_results_free(rag_results_t *results);
 
 /* ===========================================================================
+ * Answering
+ *
+ * rag_ask() searches the chunks most similar to the question, gives them to
+ * the chat model as numbered passages ([1], [2], ...) and streams its answer.
+ * ======================================================================== */
+
+/* Receives the answer while it is generated; return nonzero to stop (rag_ask then fails with RAG_ERROR_ABORTED). */
+typedef int (*rag_token_fn)(const char *text, void *user_data);
+
+typedef struct rag_ask_options {
+    size_t top_k;              /* chunks given to the model; 0: RAG_DEFAULT_TOP_K */
+    double min_score;          /* chunks with a lower score are not given to the model; 0: none are dropped */
+    const char *chat_model;    /* NULL: the chat model of the handle */
+    const char *system_prompt; /* NULL: one asking to answer from the passages only, citing them; "": none */
+    rag_token_fn on_token;     /* called with every piece of the answer; NULL: no streaming */
+    void *user_data;
+} rag_ask_options_t;
+
+typedef struct rag_answer {
+    const char *text;            /* the whole answer */
+    const char *model;           /* the chat model that wrote it */
+    const rag_result_t *sources; /* the passages given to the model: [n] in the answer is sources[n - 1] */
+    size_t sources_count;
+} rag_answer_t;
+
+/*
+ * Answers a question from the indexed documents. `options` can be NULL.
+ * Fails with RAG_ERROR_EMPTY if nothing has been indexed. Release *answer
+ * with rag_answer_free().
+ */
+RAG_API rag_status_t rag_ask(rag_t *rag, const char *question, const rag_ask_options_t *options, rag_answer_t **answer);
+
+/* Releases an answer. NULL is ignored. */
+RAG_API void rag_answer_free(rag_answer_t *answer);
+
+/* ===========================================================================
  * Information
  * ======================================================================== */
 

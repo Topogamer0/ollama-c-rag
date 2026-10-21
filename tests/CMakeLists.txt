@@ -32,6 +32,11 @@ set_target_properties(test_rag PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME rag COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/mock_server.py $<TARGET_FILE:test_rag>)
+    if(RAG_BUILD_CLI)
+        add_test(NAME cli
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/mock_server.py
+                    ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py $<TARGET_FILE:ragc>)
+    endif()
 else()
     message(STATUS "Python 3 not found: the integration tests are disabled")
 endif()

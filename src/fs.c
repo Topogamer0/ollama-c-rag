@@ -206,7 +206,7 @@ rag_status_t rag_fs_list_dir(const char *dir, fs_list_t *out, err_t *e) {
     closedir(d);
 
     if (!walk(dir, 0, out)) return rag_err_set(e, RAG_ERROR_MEMORY, "out of memory");
-    qsort(out->items, out->count, sizeof(*out->items), compare_entries);
+    if (out->count > 1) qsort(out->items, out->count, sizeof(*out->items), compare_entries);
     return RAG_OK;
 }
 

@@ -484,6 +484,95 @@ static void test_abort(void) {
     rag_close(rag);
 }
 
+typedef struct tokens {
+    string_t text;
+    int count;
+    int stop_at;
+} tokens_t;
+
+static int on_token(const char *text, void *data) {
+    tokens_t *t = data;
+    CHECK(text && *text);
+    string_append(&t->text, text);
+    return ++t->count == t->stop_at;
+}
+
+static void test_ask(void) {
+    mock_reset();
+    rag_t *rag = open_index("main.db", (rag_options_t){.chat_model = "mock-chat"});
+    tokens_t tokens = {{0}, 0, 0};
+    rag_ask_options_t o = {.top_k = 2, .on_token = on_token, .user_data = &tokens};
+    rag_answer_t *answer = NULL;
+    rag_status_t st = rag_ask(rag, "Why are bananas yellow?", &o, &answer);
+    if (st != RAG_OK) fprintf(stderr, "  %s\n", rag_last_error(rag)->message);
+    CHECK(st == RAG_OK);
+    CHECK(answer != NULL);
+    if (answer) {
+        CHECK_STR(answer->text, "Found 2 sources [1]. You asked: Why are bananas yellow?");
+        CHECK_STR(tokens.text.data, answer->text); /* the streamed pieces make the answer */
+        CHECK(tokens.count > 1);
+        CHECK_STR(answer->model, "mock-chat");
+        CHECK_SIZE(answer->sources_count, 2);
+        CHECK_STR(answer->sources[0].path, path_of(docs, "fruit.md"));
+        CHECK(answer->sources[0].score >= answer->sources[1].score);
+    }
+    rag_answer_free(answer);
+    free(tokens.text.data);
+    CHECK(mock_stat("chat_requests") == 1);
+    CHECK(last_request_has("\\\"model\\\":\\\"mock-chat\\\""));
+    CHECK(last_request_has("Question: Why are bananas yellow?"));
+    CHECK(last_request_has("[1] fruit.md, lines 1-3\\\\n# Fruit")); /* JSON in JSON */
+
+    /* without streaming, with another model and no system prompt */
+    rag_ask_options_t plain = {.chat_model = "other-chat", .system_prompt = ""};
+    CHECK(rag_ask(rag, "bananas", &plain, &answer) == RAG_OK);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(answer->sources_count, info.chunks < 5 ? info.chunks : 5);
+    CHECK_STR(answer->model, "other-chat");
+    rag_answer_free(answer);
+    CHECK(last_request_has("\\\"model\\\":\\\"other-chat\\\""));
+    char *last = mock("/_last", NULL);
+    CHECK(strstr(last, "\\\"role\\\":\\\"system") == NULL);
+    free(last);
+
+    /* every chunk can be filtered out: the model is told so */
+    rag_ask_options_t strict = {.min_score = 0.9999};
+    CHECK(rag_ask(rag, "bananas", &strict, &answer) == RAG_OK);
+    CHECK_SIZE(answer->sources_count, 0);
+    CHECK(strstr(answer->text, "Found 0 sources") != NULL);
+    CHECK(last_request_has("no relevant passage"));
+    rag_answer_free(answer);
+
+    /* the token callback can stop the answer */
+    tokens = (tokens_t){{0}, 0, 2};
+    CHECK(rag_ask(rag, "bananas", &o, &answer) == RAG_ERROR_ABORTED);
+    CHECK(answer == NULL);
+    CHECK(tokens.count == 2);
+    free(tokens.text.data);
+
+    /* errors of the chat model */
+    rag_ask_options_t missing = {.chat_model = "missing"};
+    CHECK(rag_ask(rag, "bananas", &missing, &answer) == RAG_ERROR_OLLAMA);
+    CHECK(rag_last_error(rag)->status_code == 404);
+    CHECK(strstr(rag_last_error(rag)->message, "chat model 'missing'") != NULL);
+    rag_ask_options_t broken = {.chat_model = "midstream-error"};
+    CHECK(rag_ask(rag, "bananas", &broken, &answer) == RAG_ERROR_OLLAMA);
+    CHECK(strstr(rag_last_error(rag)->message, "something went wrong") != NULL);
+    CHECK(answer == NULL);
+
+    CHECK(rag_ask(rag, "", NULL, &answer) == RAG_ERROR_INVALID);
+    CHECK(rag_ask(rag, "x", NULL, NULL) == RAG_ERROR_INVALID);
+    rag_answer_free(NULL);
+    rag_close(rag);
+
+    /* nothing to answer from */
+    rag = open_index("empty-ask.db", (rag_options_t){0});
+    CHECK(rag_ask(rag, "bananas", NULL, &answer) == RAG_ERROR_EMPTY);
+    CHECK(strstr(rag_last_error(rag)->message, "no documents") != NULL);
+    rag_close(rag);
+}
+
 static void test_empty_index(void) {
     rag_t *rag = open_index("empty.db", (rag_options_t){0});
     rag_results_t *r = NULL;
@@ -508,6 +597,7 @@ int main(void) {
     RUN(test_ollama_errors);
     RUN(test_interrupted);
     RUN(test_abort);
+    RUN(test_ask);
     RUN(test_empty_index);
 
     remove_tree(tmp);

@@ -131,6 +131,13 @@ static void test_list_dir(void) {
         free(locked);
     }
 
+    /* an empty directory */
+    const char *empty = path_of(tmp, "empty");
+    mkdir(empty, 0755);
+    CHECK(rag_fs_list_dir(empty, &list, &e) == RAG_OK);
+    CHECK_SIZE(list.count, 0);
+    rag_fs_list_free(&list);
+
     CHECK(rag_fs_list_dir(path_of(root, "a.md"), &list, &e) == RAG_ERROR_INVALID);
     CHECK(rag_fs_list_dir(path_of(root, "missing"), &list, &e) == RAG_ERROR_NOT_FOUND);
     CHECK(strstr(e.pub.message, "missing") != NULL);
