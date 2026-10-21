@@ -74,6 +74,7 @@ RAG_API const char *rag_status_string(rag_status_t status);
 #define RAG_DEFAULT_CHUNK_OVERLAP 100
 #define RAG_DEFAULT_BATCH_SIZE 32
 #define RAG_DEFAULT_TOP_K 5
+#define RAG_MAX_BATCH_SIZE 65536
 
 /* Value of rag_options_t.chunk_overlap for chunks that do not overlap. */
 #define RAG_NO_OVERLAP ((size_t) - 1)
@@ -83,7 +84,7 @@ typedef struct rag rag_t;
 /* What happened to a file, reported to the progress callback. */
 typedef enum rag_event {
     RAG_FILE_INDEXED,   /* a new or modified file has been (re)indexed */
-    RAG_FILE_UNCHANGED, /* the file was already up to date */
+    RAG_FILE_UNCHANGED, /* the file was already up to date (or another handle indexed it meanwhile) */
     RAG_FILE_REMOVED,   /* the file has been removed from the index */
     RAG_FILE_FAILED     /* the file could not be indexed and has been skipped */
 } rag_event_t;
@@ -117,7 +118,7 @@ typedef struct rag_options {
      */
     const char *query_prefix;
     const char *document_prefix;
-    /* Chunks embedded per request to Ollama; 0: RAG_DEFAULT_BATCH_SIZE */
+    /* Chunks embedded per request to Ollama, at most RAG_MAX_BATCH_SIZE; 0: RAG_DEFAULT_BATCH_SIZE */
     size_t batch_size;
 
     /* Chat model used by rag_ask; NULL: RAG_DEFAULT_CHAT_MODEL */
@@ -125,7 +126,11 @@ typedef struct rag_options {
 
     /* Maximum characters per chunk; 0: the database's, or RAG_DEFAULT_CHUNK_SIZE */
     size_t chunk_size;
-    /* Characters shared by consecutive chunks; 0: the database's, or RAG_DEFAULT_CHUNK_OVERLAP */
+    /*
+     * Characters shared by consecutive chunks (less than chunk_size); 0: the
+     * database's, or RAG_DEFAULT_CHUNK_OVERLAP but at most a quarter of
+     * chunk_size; RAG_NO_OVERLAP: none
+     */
     size_t chunk_overlap;
 
     /* Fail with RAG_ERROR_NOT_FOUND if the database does not exist, instead of creating it */
@@ -181,14 +186,21 @@ RAG_API rag_status_t rag_add_file(rag_t *rag, const char *path, rag_index_stats_
  *
  * Embeddings are computed in batches that can span several files. Every file
  * is stored as soon as all its chunks have been embedded: if the call fails or
- * is stopped, the files already stored stay indexed, and a file that was being
- * indexed is indexed again by the next call.
+ * is stopped, the files already stored stay indexed (and counted in `stats`),
+ * and a file that was being indexed is indexed again by the next call.
+ *
+ * Several handles, in the same process or not, can index the same database:
+ * the embedding model and size are checked again before anything is stored,
+ * and a file written by two of them at the same time is kept from the one
+ * that started writing it last.
  */
 RAG_API rag_status_t rag_add_dir(rag_t *rag, const char *path, rag_index_stats_t *stats);
 
 /*
  * Removes a file from the index, or all the indexed files below a directory.
- * The file does not need to exist anymore. Fails with RAG_ERROR_NOT_FOUND if
+ * The file does not need to exist anymore. Every file is removed in its own
+ * transaction, then reported: if the progress callback stops the call, the
+ * files reported so far stay removed. Fails with RAG_ERROR_NOT_FOUND if
  * nothing is indexed under `path`. `stats` can be NULL.
  */
 RAG_API rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *stats);

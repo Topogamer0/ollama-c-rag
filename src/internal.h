@@ -123,9 +123,9 @@ typedef struct fs_list {
 /*
  * Absolute path, without "." and "..", with the links of the directories
  * resolved. The last component of a file is kept even if it is a link, and
- * does not need to exist. NULL if out of memory.
+ * does not need to exist. NULL on failure, with the reason in `e`.
  */
-char *rag_fs_canonical(const char *path);
+char *rag_fs_canonical(const char *path, err_t *e);
 /* True for the extensions of text files: .txt, .md, .markdown, ... */
 bool rag_fs_is_text_file(const char *name);
 /* stat(); RAG_ERROR_NOT_FOUND if the path does not exist. */
@@ -169,6 +169,9 @@ struct rag {
 
     struct sqlite3_stmt *stmts[8]; /* prepared statements, see db.c */
 };
+
+/* Reads the size of the stored embeddings into rag->stored_dimensions: 0 if none is stored. */
+rag_status_t rag_load_dimensions(rag_t *rag);
 
 /* Starts a public call: checks the handle and clears the last error. */
 rag_status_t rag_begin_call(rag_t *rag);
@@ -230,6 +233,10 @@ rag_status_t rag_db_find_file(rag_t *rag, const char *path, db_file_t *out, bool
 rag_status_t rag_db_files_under(rag_t *rag, const char *dir, db_file_list_t *out);
 /* Inserts a file (its id is set) or replaces the one with the same path, dropping its chunks. */
 rag_status_t rag_db_put_file(rag_t *rag, db_file_t *file);
+/* Tells whether a file still has `hash`; false if the file is gone. */
+rag_status_t rag_db_file_hash_is(rag_t *rag, int64_t id, const char *hash, bool *same);
+/* A random hash for a file being written, that cannot be the hash of a content. */
+void rag_db_pending_hash(char out[34]);
 /* Sets the hash of a file, once all its chunks are stored. */
 rag_status_t rag_db_set_file_hash(rag_t *rag, int64_t id, const char *hash);
 /* Deletes a file with its chunks; *chunks is the number of chunks deleted. */
@@ -248,6 +255,8 @@ typedef struct rag_db_counts {
 } db_counts_t;
 
 rag_status_t rag_db_counts(rag_t *rag, db_counts_t *counts);
+/* True if the index holds at least one embedding (cheaper than counting). */
+rag_status_t rag_db_has_vectors(rag_t *rag, bool *result);
 
 /* Calls `fn` for every stored embedding (`dims` floats, from little-endian storage). */
 typedef void (*db_vector_fn)(int64_t chunk_id, const float *embedding, void *data);
@@ -274,11 +283,13 @@ typedef struct topk_item {
 typedef struct topk {
     topk_item_t *items; /* a min-heap: the worst kept score first */
     size_t count;
+    size_t cap;
     size_t k;
+    bool failed; /* out of memory */
 } topk_t;
 
 bool rag_topk_init(topk_t *t, size_t k);
-/* Keeps (score, id) if it is among the k best; ties go to the smallest id. */
+/* Keeps (score, id) if it is among the k best; ties go to the smallest id. Sets `failed` if out of memory. */
 void rag_topk_push(topk_t *t, double score, int64_t id);
 /* Sorts the items, the best first. */
 void rag_topk_sort(topk_t *t);

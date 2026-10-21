@@ -139,6 +139,42 @@ def main():
         r = ragc('-H', 'http://127.0.0.1:1', 'ask', 'bananas', cwd=tmp)
         check(r.returncode == 1 and 'Failed to connect' in r.stderr, 'Ollama not running', r)
 
+        # the question is the rest of the line, words starting with "-" included
+        r = ragc('search', 'bananas', '-40', 'degrees', cwd=tmp)
+        check(r.returncode == 0 and r.stdout.startswith('1. '), 'search with "-40" in the question', r)
+        r = ragc('-m', 'mock-chat', 'ask', 'what', 'does', '-h', 'do', cwd=tmp)
+        check(r.returncode == 0 and 'You asked: what does -h do' in r.stdout, 'ask with "-h" in the question', r)
+        r = ragc('-m', 'mock-chat', 'ask', '--', '-q', 'is', 'a', 'word', cwd=tmp)
+        check(r.returncode == 0 and 'You asked: -q is a word' in r.stdout, '"--" after the command', r)
+        r = ragc('search', 'bananas', cwd=tmp)
+        check('\n   \n' not in r.stdout, 'no spaces on the empty lines of the results', r)
+
+        # a minimum score of 0 drops the negative scores, NaN is refused
+        r = ragc('-k', '100', 'search', 'bananas', cwd=tmp)
+        scores = [float(line.rsplit('score ', 1)[1].rstrip(')')) for line in r.stdout.splitlines() if '(score ' in line]
+        r = ragc('-k', '100', '-s', '0', 'search', 'bananas', cwd=tmp)
+        kept = [float(line.rsplit('score ', 1)[1].rstrip(')')) for line in r.stdout.splitlines() if '(score ' in line]
+        check(kept == [x for x in scores if x >= 0] and all(x >= 0 for x in kept), '-s 0', r)
+        r = ragc('-s', 'nan', 'search', 'bananas', cwd=tmp)
+        check(r.returncode == 2 and 'between -1 and 1' in r.stderr, '-s nan', r)
+
+        # empty arguments are invalid arguments
+        for args in [('search', ''), ('ask', ''), ('--db', '', 'stats'), ('index', '')]:
+            r = ragc(*args, cwd=tmp)
+            check(r.returncode == 2 and 'ragc --help' in r.stderr, f'empty argument {args}', r)
+
+        # a huge top-k returns everything
+        r = ragc('-k', '1152921504606846977', 'search', 'bananas', cwd=tmp)
+        check(r.returncode == 0 and '\n5. ' in r.stdout, 'huge top-k', r)
+        r = ragc('--batch-size', '1152921504606846976', 'index', 'notes', cwd=tmp)
+        check(r.returncode == 1 and 'batch size' in r.stderr, 'huge batch size', r)
+
+        # an output that cannot be written is an error
+        if os.path.exists('/dev/full'):
+            with open('/dev/full', 'w') as full:
+                r = subprocess.run([RAGC, 'stats'], cwd=tmp, stdout=full, stderr=subprocess.PIPE, text=True)
+            check(r.returncode == 1 and 'cannot write' in r.stderr, 'stdout full', r)
+
         # another embedding model
         r = ragc('-e', 'other-embed', 'search', 'bananas', cwd=tmp)
         check(r.returncode == 1 and "'mock-embed'" in r.stderr and "'other-embed'" in r.stderr and '--db' in r.stderr,
@@ -158,6 +194,21 @@ def main():
               'index a file', r)
         r = ragc('index', 'missing.md', cwd=tmp)
         check(r.returncode == 1 and 'missing.md' in r.stderr, 'index a missing file', r)
+
+        # a file that cannot be indexed does not stop the others
+        write(os.path.join(tmp, 'other.md'), 'Another note about carrots.')
+        r = ragc('index', 'notes/image.txt', 'other.md', cwd=tmp)
+        check(r.returncode == 1 and 'binary' in r.stderr and '1 indexed' in r.stdout and '1 skipped' in r.stdout,
+              'index several files, one of them binary', r)
+
+        # paths are made relative only where they start
+        deep = os.path.join(tmp, 'm' + tmp, 'w')
+        os.makedirs(deep)
+        os.makedirs(os.path.join(tmp, 'w'), exist_ok=True)
+        with open(os.path.join(deep, 'bad.txt'), 'wb') as f:
+            f.write(b'\x00')
+        r = ragc('--db', '../ragc.db', 'index', os.path.join(deep, 'bad.txt'), cwd=os.path.join(tmp, 'w'))
+        check(r.returncode == 1 and os.path.join(deep, 'bad.txt') in r.stderr, 'paths in messages', r)
 
         # remove
         r = ragc('remove', 'notes/fruit.md', 'todo.org', cwd=tmp)

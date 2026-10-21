@@ -72,6 +72,15 @@ static void test_create(void) {
     rag_close(rag);
     CHECK(file_exists(path));
 
+    /* large pages, so that several embeddings fit in each */
+    sqlite3 *db;
+    CHECK(sqlite3_open(path, &db) == SQLITE_OK);
+    sqlite3_stmt *stmt;
+    CHECK(sqlite3_prepare_v2(db, "PRAGMA page_size", -1, &stmt, NULL) == SQLITE_OK);
+    CHECK(sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 16384);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
     /* in memory */
     rag = open_ok(":memory:", NULL);
     CHECK(rag_stats(rag, &stats) == RAG_OK);
@@ -270,15 +279,18 @@ static void test_remove(void) {
     add_fake_file(rag, c, 1, 4);
     add_fake_file(rag, d, 1, 4);
 
-    /* a callback can stop the removal: nothing is removed */
+    /* a callback can stop the removal: the files reported are removed, the others are not */
     removed.stop_at = 1;
     rag_index_stats_t stats;
     CHECK(rag_remove_file(rag, docs, &stats) == RAG_ERROR_ABORTED);
-    CHECK_SIZE(stats.files_removed, 0);
+    CHECK_SIZE(stats.files_removed, 1);
+    CHECK_SIZE(stats.chunks_removed, 2);
+    CHECK_STR(removed.last, a);
     db_counts_t counts;
     CHECK(rag_db_counts(rag, &counts) == RAG_OK);
-    CHECK_SIZE(counts.files, 4);
-    CHECK_SIZE(counts.vectors, 7);
+    CHECK_SIZE(counts.files, 3);
+    CHECK_SIZE(counts.vectors, 5);
+    add_fake_file(rag, a, 2, 4);
 
     /* a directory removes everything below it, and only that */
     removed.count = 0;

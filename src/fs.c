@@ -58,17 +58,28 @@ static void normalize(char *path) {
     path[out] = '\0';
 }
 
-char *rag_fs_canonical(const char *path) {
-    if (!path || !*path) return NULL;
+char *rag_fs_canonical(const char *path, err_t *e) {
+    if (!path || !*path) {
+        rag_err_set(e, RAG_ERROR_INVALID, "no path");
+        return NULL;
+    }
     char *abs;
     if (path[0] == '/') {
         abs = rag_strdup(path);
     } else {
         char *cwd = getcwd(NULL, 0);
+        if (!cwd && errno != ENOMEM) {
+            rag_err_set(e, RAG_ERROR_IO, "cannot resolve '%s': cannot get the current directory: %s", path,
+                        strerror(errno));
+            return NULL;
+        }
         abs = cwd ? join(cwd, path) : NULL;
         free(cwd);
     }
-    if (!abs) return NULL;
+    if (!abs) {
+        rag_err_set(e, RAG_ERROR_MEMORY, "out of memory");
+        return NULL;
+    }
 
     /* directories are resolved completely */
     struct stat st;
@@ -92,7 +103,10 @@ char *rag_fs_canonical(const char *path) {
         char *result = rag_format("%s%s", strcmp(real, "/") == 0 ? "" : real, abs + slash);
         free(real);
         free(abs);
-        if (result) normalize(result);
+        if (result)
+            normalize(result);
+        else
+            rag_err_set(e, RAG_ERROR_MEMORY, "out of memory");
         return result;
     }
     normalize(abs);

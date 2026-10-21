@@ -113,67 +113,85 @@ static rag_status_t oom(rag_t *rag) { return rag_err_set(&rag->err, RAG_ERROR_ME
 /* Stored string setting, or NULL. */
 static rag_status_t stored(rag_t *rag, const char *key, char **value) { return rag_db_get_meta(rag, key, value); }
 
-static rag_status_t has_vectors(rag_t *rag, bool *result) {
-    db_counts_t c;
-    rag_status_t st = rag_db_counts(rag, &c);
-    *result = st == RAG_OK && c.vectors > 0;
+rag_status_t rag_load_dimensions(rag_t *rag) {
+    bool vectors = false;
+    int64_t dims = 0;
+    bool found = false;
+    rag_status_t st = rag_db_has_vectors(rag, &vectors);
+    if (st == RAG_OK && vectors) st = rag_db_get_meta_int(rag, "dimensions", &dims, &found);
+    /* the stored size only matters while embeddings are stored */
+    rag->stored_dimensions = st == RAG_OK && vectors && found && dims > 0 ? (size_t)dims : 0;
     return st;
 }
 
-static rag_status_t load_model(rag_t *rag, const rag_options_t *o) {
-    if (o->dimensions < 0)
-        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "invalid number of dimensions: %d", o->dimensions);
+/*
+ * Sets rag->embed_model: the option, else the database's, else the default.
+ * When the database must be updated (a new database, or a new model for an
+ * index without embeddings), sets *must_write instead, unless `write` is set.
+ */
+static rag_status_t resolve_model(rag_t *rag, const rag_options_t *o, bool write, bool *must_write) {
+    const char *wanted = o->embed_model && *o->embed_model ? o->embed_model : NULL;
     char *model = NULL;
-    rag_status_t st = stored(rag, "embed_model", &model);
-    if (st != RAG_OK) return st;
-    int64_t dims = 0, requested = 0;
-    bool dims_found = false, requested_found = false;
-    st = rag_db_get_meta_int(rag, "dimensions", &dims, &dims_found);
-    if (st == RAG_OK) st = rag_db_get_meta_int(rag, "embed_dimensions", &requested, &requested_found);
     bool vectors = false;
-    if (st == RAG_OK) st = has_vectors(rag, &vectors);
+    rag_status_t st = stored(rag, "embed_model", &model);
+    if (st == RAG_OK) st = rag_db_has_vectors(rag, &vectors);
+    if (st == RAG_OK && wanted && model && !rag_same_model(model, wanted) && vectors)
+        st = rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
+                         "the index '%s' was built with the embedding model '%s', not '%s': use the same model, or "
+                         "another database for the other model",
+                         rag->path, model, wanted);
     if (st != RAG_OK) {
         free(model);
         return st;
     }
 
-    bool changed = false;
-    if (o->embed_model && *o->embed_model) {
-        if (model && !rag_same_model(model, o->embed_model)) {
-            if (vectors) {
-                st = rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
-                                 "the index '%s' was built with the embedding model '%s', not '%s': use the same "
-                                 "model, or another database for the other model",
-                                 rag->path, model, o->embed_model);
-                free(model);
-                return st;
-            }
-            changed = true; /* nothing has been embedded yet: the model can still change */
-        }
-        if (!model) changed = true;
+    /* nothing has been embedded yet: the model can still change */
+    bool change = wanted ? !model || !rag_same_model(model, wanted) : !model;
+    if (change && !write) {
         free(model);
-        model = rag_strdup(o->embed_model);
-        if (!model) return oom(rag);
-    } else if (!model) {
-        model = rag_strdup(RAG_DEFAULT_EMBED_MODEL);
-        if (!model) return oom(rag);
-        changed = true;
+        *must_write = true;
+        return RAG_OK;
     }
-    rag->embed_model = model;
-
-    if (changed) {
+    if (change) {
+        const char *name = wanted ? wanted : RAG_DEFAULT_EMBED_MODEL;
         /* settings tied to the previous model */
-        dims_found = requested_found = false;
-        st = rag_db_set_meta(rag, "embed_model", model);
+        st = rag_db_set_meta(rag, "embed_model", name);
         if (st == RAG_OK) st = rag_db_set_meta(rag, "dimensions", "0");
         if (st == RAG_OK) st = rag_db_set_meta(rag, "embed_dimensions", "0");
         if (st == RAG_OK) st = rag_db_delete_meta(rag, "query_prefix");
         if (st == RAG_OK) st = rag_db_delete_meta(rag, "document_prefix");
+        free(model);
+        model = NULL;
         if (st != RAG_OK) return st;
     }
-    rag->stored_dimensions = dims_found && dims > 0 ? (size_t)dims : 0;
+    free(rag->embed_model);
+    rag->embed_model = wanted || !model ? rag_strdup(wanted ? wanted : RAG_DEFAULT_EMBED_MODEL) : model;
+    if (rag->embed_model != model) free(model);
+    return rag->embed_model ? RAG_OK : oom(rag);
+}
+
+static rag_status_t load_model(rag_t *rag, const rag_options_t *o) {
+    if (o->dimensions < 0)
+        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "invalid number of dimensions: %d", o->dimensions);
+    bool must_write = false;
+    rag_status_t st = resolve_model(rag, o, false, &must_write);
+    if (st == RAG_OK && must_write) {
+        /* again under the write lock, as another process may have stored embeddings meanwhile */
+        st = rag_db_begin(rag);
+        if (st == RAG_OK) st = resolve_model(rag, o, true, &must_write);
+        if (st == RAG_OK)
+            st = rag_db_commit(rag);
+        else
+            rag_db_rollback(rag);
+    }
+    if (st == RAG_OK) st = rag_load_dimensions(rag);
+    int64_t requested = 0;
+    bool requested_found = false;
+    if (st == RAG_OK) st = rag_db_get_meta_int(rag, "embed_dimensions", &requested, &requested_found);
+    if (st != RAG_OK) return st;
+
     rag->dimensions = o->dimensions ? o->dimensions : requested_found && requested > 0 ? (int)requested : 0;
-    if (o->dimensions > 0 && vectors && rag->stored_dimensions && (size_t)o->dimensions != rag->stored_dimensions)
+    if (o->dimensions > 0 && rag->stored_dimensions && (size_t)o->dimensions != rag->stored_dimensions)
         return rag_err_set(&rag->err, RAG_ERROR_MODEL_MISMATCH,
                            "the index '%s' stores embeddings of %zu dimensions, not %d: use the same size, or another "
                            "database",
@@ -227,6 +245,9 @@ static rag_status_t load_settings(rag_t *rag, const rag_options_t *o) {
             RAG_DEFAULT_CHUNK_OVERLAP < rag->chunk_size / 4 ? RAG_DEFAULT_CHUNK_OVERLAP : rag->chunk_size / 4;
     }
 
+    if (o->batch_size > RAG_MAX_BATCH_SIZE)
+        return rag_err_set(&rag->err, RAG_ERROR_INVALID, "the batch size (%zu) must be at most %d", o->batch_size,
+                           RAG_MAX_BATCH_SIZE);
     rag->batch_size = o->batch_size ? o->batch_size : RAG_DEFAULT_BATCH_SIZE;
     rag->chat_model = rag_strdup(o->chat_model && *o->chat_model ? o->chat_model : RAG_DEFAULT_CHAT_MODEL);
     rag->host = o->host && *o->host ? rag_strdup(o->host) : NULL;
@@ -287,7 +308,8 @@ rag_status_t rag_stats(rag_t *rag, rag_stats_t *stats) {
     if (st != RAG_OK) return st;
     if (!stats) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no stats");
     db_counts_t c;
-    st = rag_db_counts(rag, &c);
+    st = rag_load_dimensions(rag); /* another handle may have changed it */
+    if (st == RAG_OK) st = rag_db_counts(rag, &c);
     if (st != RAG_OK) return st;
     *stats = (rag_stats_t){
         .path = rag->path,
@@ -314,32 +336,28 @@ rag_status_t rag_remove_file(rag_t *rag, const char *path, rag_index_stats_t *st
     if (st != RAG_OK) return st;
     if (!path || !*path) return rag_err_set(&rag->err, RAG_ERROR_INVALID, "no path");
 
-    char *canonical = rag_fs_canonical(path);
-    if (!canonical) return oom(rag);
+    char *canonical = rag_fs_canonical(path, &rag->err);
+    if (!canonical) return rag->err.pub.code;
     db_file_list_t files = {0};
     st = rag_db_files_under(rag, canonical, &files);
     free(canonical);
     if (st == RAG_OK && files.count == 0)
         st = rag_err_set(&rag->err, RAG_ERROR_NOT_FOUND, "'%s' is not in the index", path);
-    if (st == RAG_OK) st = rag_db_begin(rag);
-    if (st != RAG_OK) {
-        rag_db_file_list_free(&files);
-        return st;
-    }
+    /* a transaction per file: what has been reported stays removed if the callback stops */
     for (size_t i = 0; st == RAG_OK && i < files.count; i++) {
         size_t chunks = 0;
-        st = rag_db_delete_file(rag, files.items[i].id, &chunks);
+        st = rag_db_begin(rag);
+        if (st == RAG_OK) st = rag_db_delete_file(rag, files.items[i].id, &chunks);
+        if (st == RAG_OK)
+            st = rag_db_commit(rag);
+        else
+            rag_db_rollback(rag);
         if (st == RAG_OK) {
             stats->files_removed++;
             stats->chunks_removed += chunks;
             st = rag_report(rag, RAG_FILE_REMOVED, files.items[i].path, chunks, NULL, 0, 0);
         }
     }
-    if (st == RAG_OK)
-        st = rag_db_commit(rag);
-    else
-        rag_db_rollback(rag);
-    if (st != RAG_OK) memset(stats, 0, sizeof(*stats));
     rag_db_file_list_free(&files);
     return st;
 }

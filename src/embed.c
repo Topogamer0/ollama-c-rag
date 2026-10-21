@@ -77,7 +77,7 @@ rag_status_t rag_embed_texts(rag_t *rag, const char *const *texts, size_t n, con
             }
             v[j] = (float)x;
         }
-        rag_vec_normalize(v, size); /* a zero vector stays zero: similar to nothing */
+        if (st == RAG_OK) rag_vec_normalize(v, size); /* a zero vector stays zero: similar to nothing */
     }
     ollama_response_free(res);
     if (st != RAG_OK) {

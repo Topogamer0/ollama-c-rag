@@ -107,10 +107,10 @@ rag_status_t rag_ask(rag_t *rag, const char *question, const rag_ask_options_t *
     const rag_ask_options_t *o = options ? options : &defaults;
     const char *model = o->chat_model && *o->chat_model ? o->chat_model : rag->chat_model;
 
-    db_counts_t counts;
-    st = rag_db_counts(rag, &counts);
+    bool vectors = false;
+    st = rag_db_has_vectors(rag, &vectors);
     if (st != RAG_OK) return st;
-    if (counts.vectors == 0)
+    if (!vectors)
         return rag_err_set(&rag->err, RAG_ERROR_EMPTY, "the index '%s' contains no documents: index some first",
                            rag->path);
 

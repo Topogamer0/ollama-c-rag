@@ -147,15 +147,16 @@ ragc [options] <command> [arguments]
 | `-k`, `--top-k N` | number of passages to use (default: 5) |
 | `-s`, `--min-score X` | ignore passages with a similarity below X, from -1 to 1 (default: none) |
 | `-H`, `--host URL` | Ollama server (default: `$OLLAMA_HOST`, or `http://127.0.0.1:11434`) |
-| `--chunk-size N`, `--chunk-overlap N` | chunking, in characters (default: the database's, or 800 and 100) |
-| `--batch-size N` | chunks per embedding request (default: 32) |
+| `--chunk-size N`, `--chunk-overlap N` | chunking, in characters (default: the database's, or 800 and 100; the default overlap is at most a quarter of the chunk size) |
+| `--batch-size N` | chunks per embedding request (default: 32, at most 65536) |
 | `--dimensions N` | size of the embeddings, for models that can shorten them |
 | `--system TEXT` | system prompt of the chat model (`""` for none) |
 | `--timeout SECONDS` | network timeout (default: none) |
 | `-q`, `--quiet` | print only the results: no progress, no sources |
 
-The question does not need quotes: `ragc ask when is the report due` works too. Paths below the
-current directory are shown relative to it. The exit status is 0 on success, 1 on errors and 2 for
+The question does not need quotes: everything after `search` or `ask` is the question, so options go
+before the command (`ragc -k 3 ask when is the report due`). Paths below the current directory are
+shown relative to it. The exit status is 0 on success, 1 on errors and 2 for
 invalid arguments.
 
 ```console
@@ -277,8 +278,9 @@ tell why; close it with `rag_close` in any case.
 `rag_answer_free()`; the strings of `rag_stats_t` belong to the handle. The library has no global
 state: every handle has its own SQLite connection and its own Ollama client.
 
-**Threads.** A handle must not be used by several threads at the same time; use one handle per
-thread (they can share the same database). In multi-threaded programs, call
+**Threads and processes.** A handle must not be used by several threads at the same time; use one
+handle per thread. Several handles, or several `ragc` processes, can share the same database: the
+embedding model and size are checked again under SQLite's write lock before anything is stored. In multi-threaded programs, call
 `curl_global_init(CURL_GLOBAL_DEFAULT)` once at startup.
 
 ## Limits

@@ -35,39 +35,33 @@ rag_status_t rag_find(rag_t *rag, const char *query, const rag_search_options_t 
 
     rag_results_t *results = calloc(1, sizeof(*results));
     if (!results) return rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
-    if (rag->stored_dimensions == 0) {
-        /* maybe another process indexed something in the meantime */
-        int64_t dims = 0;
-        bool found = false;
-        rag_status_t st = rag_db_get_meta_int(rag, "dimensions", &dims, &found);
-        if (st != RAG_OK) {
+    /* another handle may have indexed, or removed, files since this one was opened */
+    rag_status_t st = rag_load_dimensions(rag);
+    if (st != RAG_OK || rag->stored_dimensions == 0) {
+        /* nothing is indexed: no need to ask Ollama */
+        if (st == RAG_OK)
+            *out = results;
+        else
             free(results);
-            return st;
-        }
-        if (found && dims > 0) rag->stored_dimensions = (size_t)dims;
-    }
-    if (rag->stored_dimensions == 0) {
-        /* nothing has been indexed */
-        *out = results;
-        return RAG_OK;
+        return st;
     }
 
     const char *texts[1] = {query};
     float *q;
     size_t dims;
-    rag_status_t st = rag_embed_texts(rag, texts, 1, rag->query_prefix, &q, &dims);
+    st = rag_embed_texts(rag, texts, 1, rag->query_prefix, &q, &dims);
     if (st != RAG_OK) {
         free(results);
         return st;
     }
 
     scan_t s = {q, dims, options->min_score, {0}};
-    if (!rag_topk_init(&s.best, k)) st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
+    rag_topk_init(&s.best, k);
     /* one read transaction, so that the chunks found are still there when they are read */
-    bool reading = false;
-    if (st == RAG_OK) st = rag_db_begin_read(rag);
-    reading = st == RAG_OK;
+    st = rag_db_begin_read(rag);
+    bool reading = st == RAG_OK;
     if (st == RAG_OK) st = rag_db_scan_vectors(rag, dims, visit, &s);
+    if (st == RAG_OK && s.best.failed) st = rag_err_set(&rag->err, RAG_ERROR_MEMORY, "out of memory");
     free(q);
     rag_topk_sort(&s.best);
 

@@ -4,6 +4,7 @@
 #include <ollama_rag.h>
 
 #include <errno.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,14 +38,17 @@ static const char USAGE[] =
     "                          http://127.0.0.1:11434)\n"
     "      --chunk-size N      characters per chunk (default: the database's, or 800)\n"
     "      --chunk-overlap N   characters shared by consecutive chunks (default: the\n"
-    "                          database's, or 100)\n"
-    "      --batch-size N      chunks per embedding request (default: 32)\n"
+    "                          database's, or 100, at most a quarter of a chunk)\n"
+    "      --batch-size N      chunks per embedding request (default: 32, at most 65536)\n"
     "      --dimensions N      size of the embeddings, for models that can shorten them\n"
     "      --system TEXT       system prompt of the chat model\n"
     "      --timeout SECONDS   network timeout (default: none)\n"
     "  -q, --quiet             print only the results: no progress, no sources\n"
     "  -h, --help              show this help\n"
-    "  -V, --version           show the version\n";
+    "  -V, --version           show the version\n"
+    "\n"
+    "Options go before the question of search and ask, which is the rest of the line:\n"
+    "  ragc -k 3 ask what did I plan for the holidays?\n";
 
 typedef struct cli {
     const char *db;
@@ -115,7 +119,8 @@ static void print_message(FILE *f, const cli_t *c, const char *message) {
     const char *p = message;
     const char *found;
     while (n > 1 && (found = strstr(p, c->cwd)) != NULL) {
-        bool below = found[n] == '/';
+        /* the library quotes the paths of its messages: only the start of a path is made relative */
+        bool below = found[n] == '/' && (found == message || found[-1] == '\'');
         fwrite(p, 1, (size_t)(found - p) + (below ? 0 : 1), f);
         p = below ? found + n + 1 : found + 1;
     }
@@ -137,10 +142,11 @@ static void print_lines(const rag_result_t *r) {
 
 /* Prints a text with every line indented. */
 static void print_indented(const char *text, const char *indent) {
-    fputs(indent, stdout);
+    bool line_start = true;
     for (const char *p = text; *p; p++) {
+        if (line_start && *p != '\n') fputs(indent, stdout); /* no spaces on empty lines */
         putchar(*p);
-        if (*p == '\n' && p[1]) fputs(indent, stdout);
+        line_start = *p == '\n';
     }
     putchar('\n');
 }
@@ -174,11 +180,10 @@ static int on_progress(const rag_progress_t *p, void *data) {
     return 0;
 }
 
+/* Prints the answer while it comes; stops it if the output cannot be written. */
 static int on_token(const char *text, void *data) {
     (void)data;
-    fputs(text, stdout);
-    fflush(stdout);
-    return 0;
+    return fputs(text, stdout) == EOF || fflush(stdout) == EOF;
 }
 
 /* ---- arguments ---- */
@@ -204,7 +209,10 @@ static bool parse_size(const char *s, size_t *out) {
 static int apply_option(cli_t *c, int id, const char *value, const char *name) {
     size_t n = 0;
     switch (id) {
-    case OPT_DB: c->db = value; break;
+    case OPT_DB:
+        if (!*value) return usage_error("option '%s' needs a value", name);
+        c->db = value;
+        break;
     case OPT_EMBED_MODEL: c->options.embed_model = value; break;
     case OPT_CHAT_MODEL: c->options.chat_model = value; break;
     case OPT_HOST: c->options.host = value; break;
@@ -215,8 +223,10 @@ static int apply_option(cli_t *c, int id, const char *value, const char *name) {
     case OPT_MIN_SCORE: {
         char *end;
         c->min_score = strtod(value, &end);
-        if (end == value || *end || c->min_score < -1 || c->min_score > 1)
+        if (end == value || *end || !(c->min_score >= -1 && c->min_score <= 1)) /* NaN too */
             return usage_error("%s must be a number between -1 and 1", name);
+        /* for the library 0 means no minimum: keep the threshold 0 that was asked */
+        if (c->min_score == 0) c->min_score = -DBL_MIN;
         break;
     }
     case OPT_CHUNK_SIZE:
@@ -253,6 +263,11 @@ static int parse_args(cli_t *c, int argc, char **argv) {
         const char *arg = argv[i];
         if (options_done || arg[0] != '-' || arg[1] == '\0') {
             c->args[c->nargs++] = argv[i];
+            /* the question is the rest of the line, even words like "-40" */
+            if (c->nargs == 1 && (strcmp(arg, "ask") == 0 || strcmp(arg, "search") == 0)) {
+                options_done = true;
+                if (i + 1 < argc && strcmp(argv[i + 1], "--") == 0) i++;
+            }
             continue;
         }
         if (strcmp(arg, "--") == 0) {
@@ -311,6 +326,7 @@ static char *join_args(const cli_t *c) {
 
 static int cmd_index(cli_t *c, rag_t *rag) {
     rag_index_stats_t total = {0};
+    int code = 0;
     for (int i = 0; i < c->nargs; i++) {
         struct stat st;
         bool dir = stat(c->args[i], &st) == 0 && S_ISDIR(st.st_mode);
@@ -323,12 +339,14 @@ static int cmd_index(cli_t *c, rag_t *rag) {
         total.chunks_added += s.chunks_added;
         if (rc != RAG_OK) {
             print_error(c, rag);
-            return 1;
+            /* a file that cannot be read only concerns itself: go on with the others */
+            if (dir || s.files_failed == 0) return 1;
+            code = 1;
         }
     }
     printf("%zu indexed, %zu unchanged, %zu removed, %zu skipped (%zu chunks added)\n", total.files_indexed,
            total.files_unchanged, total.files_removed, total.files_failed, total.chunks_added);
-    return 0;
+    return code;
 }
 
 static int cmd_search(cli_t *c, rag_t *rag) {
@@ -391,7 +409,11 @@ static int cmd_stats(cli_t *c, rag_t *rag) {
     format_size(db_size, sizeof(db_size), s.database_bytes);
     format_size(text_size, sizeof(text_size), s.text_bytes);
     time_t t = (time_t)s.last_indexed;
-    if (s.last_indexed) strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", localtime(&t));
+    const struct tm *tm = s.last_indexed ? localtime(&t) : NULL;
+    if (tm)
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", tm);
+    else if (s.last_indexed)
+        snprintf(when, sizeof(when), "%lld (not a valid time)", (long long)s.last_indexed);
     printf("database         %s (%s)\n", s.path, db_size);
     if (s.dimensions)
         printf("embedding model  %s (%zu dimensions)\n", s.embed_model, s.dimensions);
@@ -420,7 +442,7 @@ static int cmd_remove(cli_t *c, rag_t *rag) {
     return code;
 }
 
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
     cli_t c = {0};
     c.db = getenv("RAGC_DB") && *getenv("RAGC_DB") ? getenv("RAGC_DB") : DEFAULT_DB;
     c.options.embed_model = getenv("RAGC_EMBED_MODEL");
@@ -454,6 +476,10 @@ int main(int argc, char **argv) {
         free(args);
         return code;
     }
+    bool blank = true; /* only empty strings: as if there were no arguments */
+    for (int i = 0; i < c.nargs; i++)
+        if (c.args[i][0]) blank = false;
+    if (blank) c.nargs = 0;
     if (COMMANDS[k].takes_args != (c.nargs > 0)) {
         fprintf(stderr, "ragc: %s: %s\n", c.command,
                 COMMANDS[k].takes_args ? COMMANDS[k].missing : "no arguments expected");
@@ -479,5 +505,15 @@ int main(int argc, char **argv) {
     rag_close(rag);
     free(c.cwd);
     free(args);
+    return code;
+}
+
+int main(int argc, char **argv) {
+    int code = run(argc, argv);
+    /* a lost answer is an error, e.g. when the disk is full */
+    if (fflush(stdout) == EOF || ferror(stdout)) {
+        fprintf(stderr, "ragc: cannot write the output: %s\n", strerror(errno ? errno : EIO));
+        if (code == 0) code = 1;
+    }
     return code;
 }

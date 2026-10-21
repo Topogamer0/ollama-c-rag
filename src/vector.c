@@ -55,16 +55,26 @@ static void swap(topk_item_t *a, topk_item_t *b) {
 }
 
 bool rag_topk_init(topk_t *t, size_t k) {
-    t->k = k;
-    t->count = 0;
-    t->items = k ? malloc(k * sizeof(*t->items)) : NULL;
-    return t->items || k == 0;
+    *t = (topk_t){.k = k};
+    return true;
 }
 
 void rag_topk_push(topk_t *t, double score, int64_t id) {
     topk_item_t item = {score, id};
-    if (t->k == 0) return;
+    if (t->k == 0 || t->failed) return;
     if (t->count < t->k) {
+        /* the array grows with the results, so that a huge k costs nothing */
+        if (t->count == t->cap) {
+            size_t cap = t->cap ? t->cap * 2 : 16;
+            if (cap > t->k || cap < t->cap) cap = t->k;
+            topk_item_t *items = cap <= SIZE_MAX / sizeof(*items) ? realloc(t->items, cap * sizeof(*items)) : NULL;
+            if (!items) {
+                t->failed = true;
+                return;
+            }
+            t->items = items;
+            t->cap = cap;
+        }
         /* sift up */
         size_t i = t->count++;
         t->items[i] = item;

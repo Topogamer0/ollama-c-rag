@@ -56,7 +56,10 @@ static void test_text_extensions(void) {
 }
 
 static void check_canonical(const char *input, const char *expected) {
-    char *got = rag_fs_canonical(input);
+    err_t e;
+    rag_err_init(&e);
+    char *got = rag_fs_canonical(input, &e);
+    rag_err_free(&e);
     CHECK_STR(got, expected);
     free(got);
 }
@@ -90,7 +93,27 @@ static void test_canonical(void) {
     check_canonical(path_of(tmp, "a.md"), path_of(tmp, "a.md"));
     check_canonical("/", "/");
     check_canonical("//", "/");
-    CHECK(rag_fs_canonical("") == NULL);
+    err_t e;
+    rag_err_init(&e);
+    CHECK(rag_fs_canonical("", &e) == NULL);
+    CHECK(e.pub.code == RAG_ERROR_INVALID);
+
+    /* the current directory does not exist anymore */
+    char *here = getcwd(NULL, 0);
+    const char *gone = path_of(tmp, "gone-cwd");
+    CHECK(mkdir(gone, 0755) == 0);
+    CHECK(chdir(gone) == 0);
+    CHECK(rmdir(gone) == 0);
+    char *probe = getcwd(NULL, 0); /* some systems still know the path */
+    if (!probe) {
+        CHECK(rag_fs_canonical("a.md", &e) == NULL);
+        CHECK(e.pub.code == RAG_ERROR_IO);
+        CHECK(strstr(e.pub.message, "current directory") != NULL);
+    }
+    free(probe);
+    CHECK(chdir(here) == 0);
+    free(here);
+    rag_err_free(&e);
 }
 
 static void test_list_dir(void) {

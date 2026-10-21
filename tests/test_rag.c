@@ -10,6 +10,7 @@
 #include "test_files.h"
 
 #include <curl/curl.h>
+#include <stdint.h>
 
 static char *tmp;  /* temporary directory */
 static char *docs; /* the documents */
@@ -574,6 +575,192 @@ static void test_ask(void) {
     rag_close(rag);
 }
 
+/* ---- several handles on the same database ---- */
+
+typedef struct race {
+    rag_t *other;
+    const char *file;
+    rag_index_stats_t other_stats;
+    rag_status_t other_status;
+    int calls;
+} race_t;
+
+/* While the first handle is between two batches, the other one indexes the same file. */
+static int index_meanwhile(const rag_progress_t *p, void *data) {
+    race_t *r = data;
+    if (p->event == RAG_FILE_INDEXED && r->calls++ == 0)
+        r->other_status = rag_add_file(r->other, r->file, &r->other_stats);
+    return 0;
+}
+
+static void test_same_file_twice(void) {
+    char *dir = dup_string(path_of(tmp, "race"));
+    write_file(path_of(dir, "a.txt"), "Alpha.");
+    string_t text = {0};
+    for (int i = 0; i < 12; i++) string_append(&text, "A sentence of the long file. ");
+    write_file(path_of(dir, "f.txt"), text.data);
+    free(text.data);
+
+    race_t r = {0};
+    r.file = path_of(dir, "f.txt");
+    r.other = open_index("race.db", (rag_options_t){.chunk_size = 40});
+    rag_t *rag = open_index(
+        "race.db",
+        (rag_options_t){.chunk_size = 40, .batch_size = 2, .progress = index_meanwhile, .progress_data = &r});
+    rag_index_stats_t stats;
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_OK);
+    CHECK(r.other_status == RAG_OK);
+    CHECK_SIZE(r.other_stats.files_indexed, 1);
+    size_t f_chunks = r.other_stats.chunks_added;
+    CHECK(f_chunks > 4);
+    /* the first handle leaves the file to the other one, that started writing it last */
+    CHECK_SIZE(stats.files_indexed, 1);
+    CHECK_SIZE(stats.files_unchanged, 1);
+
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 2);
+    CHECK_SIZE(info.chunks, 1 + f_chunks); /* no chunk twice */
+    CHECK(rag_add_dir(r.other, dir, &stats) == RAG_OK);
+    CHECK_SIZE(stats.files_unchanged, 2);
+    rag_close(rag);
+    rag_close(r.other);
+    free(dir);
+}
+
+static void test_models_of_two_handles(void) {
+    /* both are opened on an empty index, each with its own model */
+    rag_t *x = open_index("two-models.db", (rag_options_t){.embed_model = "model-x"});
+    rag_t *y = open_index("two-models.db", (rag_options_t){.embed_model = "model-y"});
+    rag_index_stats_t stats;
+    CHECK(rag_add_file(y, path_of(docs, "fruit.md"), &stats) == RAG_OK);
+    CHECK(rag_add_file(x, path_of(docs, "code.txt"), &stats) == RAG_ERROR_MODEL_MISMATCH);
+    CHECK(strstr(rag_last_error(x)->message, "model-y") != NULL);
+    rag_close(x);
+    rag_close(y);
+    rag_t *rag = open_index("two-models.db", (rag_options_t){.embed_model = "model-y"});
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 1);
+    rag_results_t *r = NULL;
+    CHECK(rag_search(rag, "bananas", NULL, &r) == RAG_OK);
+    rag_results_free(r);
+    rag_close(rag);
+
+    /* the same with two sizes of embeddings */
+    rag_t *big = open_index("two-sizes.db", (rag_options_t){0});
+    rag_t *small = open_index("two-sizes.db", (rag_options_t){.dimensions = 64});
+    CHECK(rag_add_file(big, path_of(docs, "fruit.md"), &stats) == RAG_OK);
+    CHECK(rag_add_file(small, path_of(docs, "code.txt"), &stats) == RAG_ERROR_MODEL_MISMATCH);
+    CHECK(strstr(rag_last_error(small)->message, "256") != NULL);
+    /* the handle opened before sees what the other stored */
+    CHECK(rag_stats(small, &info) == RAG_OK);
+    CHECK_SIZE(info.dimensions, 256);
+    CHECK(rag_search(big, "bananas", NULL, &r) == RAG_OK);
+    CHECK(r && r->count == 1);
+    rag_results_free(r);
+    rag_close(big);
+    rag_close(small);
+}
+
+static void test_emptied_index(void) {
+    rag_t *rag = open_index("emptied.db", (rag_options_t){0});
+    CHECK(rag_add_file(rag, path_of(docs, "fruit.md"), NULL) == RAG_OK);
+    CHECK(rag_remove_file(rag, path_of(docs, "fruit.md"), NULL) == RAG_OK);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.dimensions, 0);
+    rag_close(rag);
+
+    /* nothing to search: Ollama is not even asked */
+    rag = open_index("emptied.db", (rag_options_t){.host = "http://127.0.0.1:1"});
+    rag_results_t *r = NULL;
+    CHECK(rag_search(rag, "bananas", NULL, &r) == RAG_OK);
+    CHECK(r && r->count == 0);
+    rag_results_free(r);
+    rag_close(rag);
+
+    /* and the size of the embeddings can change */
+    rag = open_index("emptied.db", (rag_options_t){.dimensions = 64});
+    rag_status_t st = rag_add_file(rag, path_of(docs, "fruit.md"), NULL);
+    if (st != RAG_OK) fprintf(stderr, "  %s\n", rag_last_error(rag)->message);
+    CHECK(st == RAG_OK);
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.dimensions, 64);
+    rag_close(rag);
+}
+
+typedef struct order {
+    size_t done[16];
+    int count;
+} order_t;
+
+static int record_order(const rag_progress_t *p, void *data) {
+    order_t *o = data;
+    if (o->count < 16) o->done[o->count++] = p->done;
+    return 0;
+}
+
+static void test_progress_order(void) {
+    char *dir = dup_string(path_of(tmp, "order"));
+    write_file(path_of(dir, "b.md"), "Bravo.");
+    write_file(path_of(dir, "c.md"), "Charlie.");
+    rag_t *rag = open_index("order.db", (rag_options_t){0});
+    CHECK(rag_add_dir(rag, dir, NULL) == RAG_OK);
+    rag_close(rag);
+
+    /* a.md waits for its embedding while b.md and c.md are found unchanged */
+    write_file(path_of(dir, "a.md"), "Alpha.");
+    order_t o = {{0}, 0};
+    rag = open_index("order.db", (rag_options_t){.progress = record_order, .progress_data = &o});
+    CHECK(rag_add_dir(rag, dir, NULL) == RAG_OK);
+    CHECK(o.count == 3);
+    for (int i = 1; i < o.count; i++) CHECK(o.done[i] >= o.done[i - 1]);
+    rag_close(rag);
+    free(dir);
+}
+
+static int stop_now(const rag_progress_t *p, void *data) {
+    (void)p;
+    (void)data;
+    return 1;
+}
+
+static void test_stop_in_batch(void) {
+    /* the two files are stored by the same batch: both are counted, though only one is reported */
+    char *dir = dup_string(path_of(tmp, "stop"));
+    write_file(path_of(dir, "a.md"), "Alpha.");
+    write_file(path_of(dir, "b.md"), "Bravo.");
+    rag_t *rag = open_index("stop.db", (rag_options_t){.progress = stop_now});
+    rag_index_stats_t stats;
+    CHECK(rag_add_dir(rag, dir, &stats) == RAG_ERROR_ABORTED);
+    CHECK_SIZE(stats.files_indexed, 2);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK_SIZE(info.files, 2);
+    rag_close(rag);
+    free(dir);
+}
+
+static void test_large_values(void) {
+    rag_t *rag = open_index("main.db", (rag_options_t){0});
+    rag_results_t *r = NULL;
+    rag_search_options_t all = {.top_k = SIZE_MAX};
+    CHECK(rag_search(rag, "bananas", &all, &r) == RAG_OK);
+    rag_stats_t info;
+    CHECK(rag_stats(rag, &info) == RAG_OK);
+    CHECK(r && r->count == info.chunks);
+    rag_results_free(r);
+    rag_close(rag);
+
+    rag = NULL;
+    rag_options_t huge = {.embed_model = "mock-embed", .batch_size = (size_t)1 << 60};
+    CHECK(rag_open(path_of(tmp, "main.db"), &huge, &rag) == RAG_ERROR_INVALID);
+    CHECK(strstr(rag_last_error(rag)->message, "batch size") != NULL);
+    rag_close(rag);
+    rag_close(open_index("main.db", (rag_options_t){.batch_size = RAG_MAX_BATCH_SIZE}));
+}
+
 static void test_empty_index(void) {
     rag_t *rag = open_index("empty.db", (rag_options_t){0});
     rag_results_t *r = NULL;
@@ -599,6 +786,12 @@ int main(void) {
     RUN(test_interrupted);
     RUN(test_abort);
     RUN(test_ask);
+    RUN(test_same_file_twice);
+    RUN(test_models_of_two_handles);
+    RUN(test_emptied_index);
+    RUN(test_progress_order);
+    RUN(test_stop_in_batch);
+    RUN(test_large_values);
     RUN(test_empty_index);
 
     remove_tree(tmp);

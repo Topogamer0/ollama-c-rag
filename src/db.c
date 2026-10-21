@@ -103,6 +103,11 @@ static char *column_text(sqlite3_stmt *stmt, int i) {
 /* ---- opening ---- */
 
 static rag_status_t create_schema(rag_t *rag) {
+    /*
+     * Pages of 16 KB hold 5 embeddings of 768 floats where pages of 4 KB hold 1:
+     * a smaller file and faster searches. Ignored if the file is not empty.
+     */
+    exec(rag, "PRAGMA page_size = 16384");
     rag_status_t st = exec(rag, "BEGIN IMMEDIATE");
     if (st != RAG_OK) return st;
     int64_t tables = 0;
@@ -390,6 +395,34 @@ rag_status_t rag_db_put_file(rag_t *rag, db_file_t *file) {
     return st;
 }
 
+rag_status_t rag_db_file_hash_is(rag_t *rag, int64_t id, const char *hash, bool *same) {
+    *same = false;
+    sqlite3_stmt *stmt;
+    rag_status_t st = prepare(rag, "SELECT hash = ?2 FROM files WHERE id = ?1", &stmt);
+    if (st != RAG_OK) return st;
+    sqlite3_bind_int64(stmt, 1, id);
+    bind_text(stmt, 2, hash);
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW)
+        *same = sqlite3_column_int(stmt, 0) != 0;
+    else if (rc != SQLITE_DONE)
+        st = db_error(rag);
+    sqlite3_finalize(stmt);
+    return st;
+}
+
+void rag_db_pending_hash(char out[34]) {
+    static const char digits[] = "0123456789abcdef";
+    unsigned char random[16];
+    sqlite3_randomness(sizeof(random), random);
+    out[0] = '~'; /* never the start of a hexadecimal digest */
+    for (int i = 0; i < 16; i++) {
+        out[1 + 2 * i] = digits[random[i] >> 4];
+        out[2 + 2 * i] = digits[random[i] & 15];
+    }
+    out[33] = '\0';
+}
+
 rag_status_t rag_db_set_file_hash(rag_t *rag, int64_t id, const char *hash) {
     sqlite3_stmt *stmt;
     rag_status_t st = prepare(rag, "UPDATE files SET hash = ?2 WHERE id = ?1", &stmt);
@@ -519,6 +552,13 @@ rag_status_t rag_db_get_chunk(rag_t *rag, int64_t chunk_id, rag_result_t *out, b
 rag_status_t rag_db_begin_read(rag_t *rag) { return exec(rag, "BEGIN"); }
 
 /* ---- statistics ---- */
+
+rag_status_t rag_db_has_vectors(rag_t *rag, bool *result) {
+    int64_t any = 0;
+    rag_status_t st = query_int(rag, "SELECT EXISTS (SELECT 1 FROM vectors)", &any);
+    *result = st == RAG_OK && any;
+    return st;
+}
 
 rag_status_t rag_db_counts(rag_t *rag, db_counts_t *c) {
     sqlite3_stmt *stmt;
