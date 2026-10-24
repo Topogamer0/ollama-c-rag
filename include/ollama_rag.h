@@ -22,8 +22,8 @@ extern "C" {
 
 #define RAG_VERSION_MAJOR 0
 #define RAG_VERSION_MINOR 2
-#define RAG_VERSION_PATCH 0
-#define RAG_VERSION "0.2.0"
+#define RAG_VERSION_PATCH 1
+#define RAG_VERSION "0.2.1"
 
 /*
  * The functions of the library. A Windows DLL exports them (RAG_BUILDING_SHARED)
@@ -43,7 +43,7 @@ extern "C" {
 #define RAG_API
 #endif
 
-/* Returns the library version, e.g. "0.2.0". */
+/* Returns the library version, e.g. "0.2.1". */
 RAG_API const char *rag_version(void);
 
 /* ===========================================================================

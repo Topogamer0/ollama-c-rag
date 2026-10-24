@@ -11,7 +11,7 @@ foreach(policy CMP0177 CMP0207)
 endforeach()
 
 project(ollama-rag-c
-    VERSION 0.2.0
+    VERSION 0.2.1
     DESCRIPTION "Local Retrieval-Augmented Generation in C, with Ollama and SQLite"
     LANGUAGES C)
 
