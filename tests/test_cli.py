@@ -154,6 +154,13 @@ def main():
         check(r.returncode == 1 and "invalid Ollama host 'http://[::1'" in r.stderr, 'invalid host', r)
         r = ragc('search', 'bananas', cwd=tmp, env={'OLLAMA_HOST': '[::1]:x'})
         check(r.returncode == 1 and "invalid Ollama host '[::1]:x' (OLLAMA_HOST)" in r.stderr, 'invalid OLLAMA_HOST', r)
+        # 0.0.0.0, which makes the server listen on every interface, reaches the local server, on
+        # Windows too, which refuses connections to 0.0.0.0
+        port = HOST.rsplit(':', 1)[1]
+        r = ragc('search', 'bananas', cwd=tmp, env={'OLLAMA_HOST': f'0.0.0.0:{port}'})
+        check(r.returncode == 0 and r.stdout.startswith('1. '), 'OLLAMA_HOST=0.0.0.0', r)
+        r = ragc('-H', f'http://0.0.0.0:{port}', 'search', 'bananas', cwd=tmp)
+        check(r.returncode == 0 and r.stdout.startswith('1. '), '--host http://0.0.0.0', r)
 
         # the question is the rest of the line, words starting with "-" included
         r = ragc('search', 'bananas', '-40', 'degrees', cwd=tmp)
