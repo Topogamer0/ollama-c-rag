@@ -2,10 +2,12 @@ name: Release
 
 # A tag v* publishes ragc.exe for Windows x64, with the DLLs it needs, as a
 # zip attached to the GitHub release of the tag: the one created from the
-# GitHub page if there is one (published or draft), else a new one. Then it
-# updates the ollama-c-rag formula of the Homebrew tap
-# (https://github.com/Topogamer0/homebrew-tap) to the source archive of the
-# tag. Run by hand, the workflow only builds the zip, as an artifact of the run.
+# GitHub page if there is one (published or draft), else a new one. Then,
+# unless the tag is a pre-release (v1.2.0-rc.1), it updates the ollama-c-rag
+# formula of the Homebrew tap (https://github.com/Topogamer0/homebrew-tap) to
+# the source archive of the tag. Run by hand on a branch, the workflow only
+# builds the zip, as an artifact of the run; on a tag, it also attaches the zip
+# to the release of the tag, but does not update the formula.
 on:
   push:
     tags: ['v*']
@@ -71,7 +73,8 @@ jobs:
           function Test-Release { gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null; $LASTEXITCODE -eq 0 }
           if (-not (Test-Release)) {
             gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --generate-notes --verify-tag
-            # it fails if the release was created from the page meanwhile: then that one is used
+            # it fails if a release was published from the page meanwhile: then that one is used
+            # (a draft saved in that same instant does not make it fail)
             if ($LASTEXITCODE -ne 0 -and -not (Test-Release)) { exit 1 }
           }
           gh release upload $tag $env:ZIP --repo $env:GITHUB_REPOSITORY --clobber

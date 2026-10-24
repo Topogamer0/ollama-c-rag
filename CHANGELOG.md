@@ -16,16 +16,17 @@ All notable changes to this project are documented in this file. The format foll
 
 - Ollama-C v0.2.1. With `RAG_USE_SYSTEM_OLLAMA_C`, the installed Ollama-C must be 0.2.1 or later,
   and so do the CMake package and the pkg-config file of ollama-rag-c.
-- Release workflow: the Windows zip goes to the release of the tag created from the GitHub page,
-  published or draft, also when it is created while the workflow runs; a release is created only
-  when there is none.
+- Release workflow: when the release of the tag is published from the GitHub page while the
+  workflow is creating one, the workflow attaches the zip to it instead of failing. A release made
+  from the page before, published or draft, was already used as it is.
 
 ### Fixed
 
 - `OLLAMA_HOST=0.0.0.0` (or `::`), which makes the Ollama server listen on every interface, now
-  works on Windows too: like the `ollama` command, the library and `ragc` connect to `127.0.0.1`
-  (or `::1`) instead of `0.0.0.0`, which Windows refuses. The same goes for `--host` and the `host`
-  option.
+  works on every system: like the `ollama` command, the library and `ragc` connect to `127.0.0.1`
+  (or `::1`). Windows refused connections to `0.0.0.0` and `[::]`, and a bare `::` was refused as an
+  invalid host on every system; it is now accepted like `[::]`. The same goes for `--host` and the
+  `host` option.
 
 ## [0.2.0] - 2026-10-21
 
@@ -34,6 +35,8 @@ All notable changes to this project are documented in this file. The format foll
 - Windows support with MSVC (x64), static library and DLL. Paths are UTF-8 and may contain spaces
   and any character, with `\` or `/`, in any case, and longer than `MAX_PATH`. The index stores
   them with `\` and spelled as on the disk. Files with the hidden or system attribute are skipped.
+  An unreachable network share is an I/O error, not a missing directory, so its files stay in the
+  index.
 - `ragc.exe` for Windows x64, with the DLLs it needs, attached to each release as
   `ragc-<version>-windows-x64.zip`. It reads its arguments and environment as UTF-16 and writes
   UTF-8 to the console.
@@ -45,9 +48,10 @@ All notable changes to this project are documented in this file. The format foll
 ### Changed
 
 - Ollama-C v0.2.0, which builds with MSVC. The CMake package requires Ollama-C 0.2.
-- An invalid Ollama host (the `host` option, `--host` or `OLLAMA_HOST`), which Ollama-C now refuses
-  like the Python client, is `RAG_ERROR_INVALID` with a message that names it, instead of
-  `RAG_ERROR_MEMORY`. So is an `OLLAMA_API_KEY` with a line break.
+- An Ollama host that the Python client rejects (the `host` option, `--host` or `OLLAMA_HOST`:
+  unbalanced brackets, a port that is not a number up to 65535, ...) is refused with
+  `RAG_ERROR_INVALID` and a message that names it; 0.1.0 connected to whatever URL Ollama-C made of
+  it. An `OLLAMA_API_KEY` with a line break is `RAG_ERROR_INVALID` instead of `RAG_ERROR_MEMORY`.
 - UTF-16 text files (written by Windows PowerShell 5 and by Notepad's "Unicode" encodings) are
   reported as such, with what to do about them, instead of as binary files.
 
@@ -57,8 +61,8 @@ All notable changes to this project are documented in this file. The format foll
   name where names do not depend on case (Windows, and macOS usually). On Windows the same holds
   for a directory renamed in another case.
 - `ragc search` showed documents with CRLF line ends with stray spaces and blank lines.
-- An unreachable network share is an I/O error, not a missing directory: its files are no longer
-  removed from the index. A directory listing that fails half-way is reported as an error.
+- A directory listing that fails half-way is reported as an error, instead of looking complete:
+  the files it did not list were skipped without a word.
 
 ## [0.1.0] - 2026-10-21
 
