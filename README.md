@@ -6,8 +6,9 @@ passages that answer a question, and let a local model answer it from them, citi
 
 It is built on [Ollama](https://ollama.com) through [Ollama-C](https://github.com/Topogamer0/Ollama-C)
 for embeddings and chat, and on SQLite for storage. SQLite is included, so the only library to
-install is libcurl. It runs on Linux, macOS and Windows, where a ready-made `ragc.exe` is
-[available](#ragc-on-windows).
+install is libcurl. It runs on Linux, macOS and Windows: Homebrew installs it on macOS and Linux
+([below](#install-with-homebrew)), and a ready-made `ragc.exe` is [available](#ragc-on-windows) for
+Windows.
 
 ```console
 $ ragc index notes
@@ -45,11 +46,35 @@ Sources:
 - Prefixes for embedding models that expect them (`embeddinggemma`, `nomic-embed-text`,
   `mxbai-embed-large`, ...).
 
+## Install with Homebrew
+
+On macOS (Apple Silicon and Intel) and Linux:
+
+```sh
+brew install topogamer0/tap/ollama-c topogamer0/tap/ollama-c-rag
+```
+
+This installs `ragc` and the library (`ollama_rag.h`, CMake and pkg-config files), built with the
+Ollama-C formula of the same tap and with SQLite from the system (macOS) or from Homebrew (Linux).
+Naming `ollama-c` too lets Homebrew 6 or later load it: formulae from third-party taps must be
+[trusted](https://docs.brew.sh/Tap-Trust), and installing a fully qualified name trusts that
+formula only. Alternatively, trust the whole tap once; then the short name is enough:
+
+```sh
+brew tap topogamer0/tap
+brew trust topogamer0/tap
+brew install ollama-c-rag
+```
+
+On Linux, a program linked through `pkg-config` needs `-Wl,-rpath,"$(brew --prefix)/lib"` to find
+the shared libraries at run time. You still need [Ollama](https://ollama.com) running, with an
+embedding model and a chat model.
+
 ## Building
 
 Requirements: a C99 compiler, CMake 3.14 or later (3.20 for the `ctest --test-dir` and
 `cmake --install` commands below; with older versions run `ctest` and `make install` in `build`), git
-(CMake downloads Ollama-C v0.2.0), and
+(CMake downloads Ollama-C v0.2.1), and
 libcurl with its development headers (`libcurl4-openssl-dev` on Debian/Ubuntu, `libcurl-devel` on
 Fedora; it comes with macOS). The tests also need Python 3.
 
@@ -89,7 +114,7 @@ directory works on any computer.
 | `RAG_BUILD_EXAMPLES`, `RAG_BUILD_TESTS` | `ON` | build the examples and the tests (top-level builds only) |
 | `RAG_INSTALL` | `ON` | generate the install target (top-level builds only) |
 | `RAG_USE_SYSTEM_SQLITE` | `OFF` | link the system SQLite instead of the bundled one |
-| `RAG_USE_SYSTEM_OLLAMA_C` | `OFF` | use an installed Ollama-C (`find_package(ollama-c)`) instead of downloading it |
+| `RAG_USE_SYSTEM_OLLAMA_C` | `OFF` | use an installed Ollama-C 0.2.1 or later (`find_package(ollama-c)`) instead of downloading it |
 | `RAG_WERROR` | `OFF` | treat the warnings of ollama-rag-c as errors (`-Werror`, `/WX`), not those of its dependencies |
 | `RAG_INSTALL_RUNTIME_DLLS` | `OFF` | Windows: install the DLLs that `ragc.exe` needs next to it (CMake 3.21) |
 
@@ -189,6 +214,10 @@ before the command (`ragc -k 3 ask when is the report due`). Paths below the cur
 shown relative to it. The exit status is 0 on success, 1 on errors and 2 for
 invalid arguments.
 
+The host can be `0.0.0.0` or `::`, the addresses that make the Ollama server listen on every
+interface (`OLLAMA_HOST=0.0.0.0`, which the server and its clients share): like the `ollama`
+command, `ragc` then connects to the server on this computer, `127.0.0.1` or `::1`, on every system.
+
 ```console
 $ ragc -k 2 search ferry to Sicily
 1. notes/trips/holidays.md:1-5  (score 0.354)
@@ -266,9 +295,6 @@ Sources:
 - **The output** is UTF-8: `ragc` switches the console to UTF-8 while it runs. When PowerShell reads
   it (in a pipe, or in a variable), it decodes it with `[Console]::OutputEncoding`: run
   `[Console]::OutputEncoding = [Text.Encoding]::UTF8` first.
-- **OLLAMA_HOST**: if it is `0.0.0.0` (as the Ollama documentation suggests to reach the server
-  from other computers), Windows refuses to connect to that address: use
-  `ragc --host http://127.0.0.1:11434`, or set `OLLAMA_HOST` to `127.0.0.1` in that window.
 
 ## How it works
 
