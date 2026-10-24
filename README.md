@@ -6,8 +6,9 @@ passages that answer a question, and let a local model answer it from them, citi
 
 It is built on [Ollama](https://ollama.com) through [Ollama-C](https://github.com/Topogamer0/Ollama-C)
 for embeddings and chat, and on SQLite for storage. SQLite is included, so the only library to
-install is libcurl. It runs on Linux, macOS and Windows, where a ready-made `ragc.exe` is
-[available](#ragc-on-windows).
+install is libcurl. It runs on Linux, macOS and Windows: Homebrew installs it on macOS and Linux
+([below](#install-with-homebrew)), and a ready-made `ragc.exe` is [available](#ragc-on-windows) for
+Windows.
 
 ```console
 $ ragc index notes
@@ -44,6 +45,30 @@ Sources:
   designated initializers, no global state, all memory released by `*_free()` functions.
 - Prefixes for embedding models that expect them (`embeddinggemma`, `nomic-embed-text`,
   `mxbai-embed-large`, ...).
+
+## Install with Homebrew
+
+On macOS (Apple Silicon and Intel) and Linux:
+
+```sh
+brew install topogamer0/tap/ollama-c topogamer0/tap/ollama-c-rag
+```
+
+This installs `ragc` and the library (`ollama_rag.h`, CMake and pkg-config files), built with the
+Ollama-C formula of the same tap and with SQLite from the system (macOS) or from Homebrew (Linux).
+Naming `ollama-c` too lets Homebrew 6 or later load it: formulae from third-party taps must be
+[trusted](https://docs.brew.sh/Tap-Trust), and installing a fully qualified name trusts that
+formula only. Alternatively, trust the whole tap once; then the short name is enough:
+
+```sh
+brew tap topogamer0/tap
+brew trust topogamer0/tap
+brew install ollama-c-rag
+```
+
+On Linux, a program linked through `pkg-config` needs `-Wl,-rpath,"$(brew --prefix)/lib"` to find
+the shared libraries at run time. You still need [Ollama](https://ollama.com) running, with an
+embedding model and a chat model.
 
 ## Building
 
